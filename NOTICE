@@ -1,0 +1,21 @@
+Zephyr Center includes code and design derived from these projects:
+
+asusctl / rog-control-center
+  Copyright (C) the asusctl contributors
+  Mozilla Public License 2.0
+  https://gitlab.com/asus-linux/asusctl
+
+G-Helper
+  Copyright (C) Sergey Vasylevskyi and contributors
+  GNU General Public License 3.0 or later
+  https://github.com/seerge/g-helper
+  Only the Windows bridge (windows/bridge) and the AsusACPI-derived
+  files carry this license.
+
+MyGo
+  MIT License
+  https://github.com/egoist/mygo
+
+CrychicUI
+  MIT License
+  https://github.com/ELY-Open-Source/CrychicUI

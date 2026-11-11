@@ -1,0 +1,20 @@
+Zephyr Center
+
+Copyright (C) 2026 the Zephyr Center contributors
+
+This Source Code Form is subject to the terms of the Mozilla Public
+License, v. 2.0. If a copy of the MPL was not distributed with this
+file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+Alternatively, this Source Code Form may be used under the terms of the
+GNU General Public License, version 3 or any later version. If a copy of
+the GPL was not distributed with this file, You can obtain one at
+https://www.gnu.org/licenses/gpl-3.0.html.
+
+The dual license exists so that the Windows build can link the
+GPL-3.0-or-later code of G-Helper (https://github.com/seerge/g-helper)
+without giving up the MPL-2.0 terms of the Linux build. The Windows
+bridge in windows/bridge is a derivative work of G-Helper and is
+distributed under GPL-3.0-or-later only.
+
+The full texts are in licenses/MPL-2.0.txt and licenses/GPL-3.0.txt.

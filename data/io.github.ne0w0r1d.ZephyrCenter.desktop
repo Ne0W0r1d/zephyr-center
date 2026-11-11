@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Zephyr Center
+Name[zh_CN]=Zephyr 中心
+Comment=Performance, fans, lighting and graphics for ASUS laptops, on Linux and Windows
+Comment[zh_CN]=华硕笔记本的性能、风扇、灯效与显卡设置，支持 Linux 与 Windows
+Exec=zephyr-center
+Icon=io.github.ne0w0r1d.ZephyrCenter
+Terminal=false
+Categories=System;Settings;HardwareSettings;
+Keywords=ASUS;ROG;asusctl;fan;aura;performance;zephyr;
+StartupNotify=true

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    SPDX-License-Identifier: GPL-3.0-or-later
+
+    The Windows backend of Zephyr Center. It links AsusACPI.cs, derived from
+    G-Helper (https://github.com/seerge/g-helper), which is GPL-3.0-or-later,
+    so this project and its binary are GPL-3.0-or-later.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>zephyr-center-helper</AssemblyName>
+    <RootNamespace>ZephyrBridge</RootNamespace>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Management" Version="10.0.0" />
+  </ItemGroup>
+</Project>
