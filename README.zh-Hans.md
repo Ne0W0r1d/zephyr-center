@@ -3,9 +3,9 @@
 <p align="center"><a href="README.md">English</a> | 简体中文</p>
 
 Zephyr Center 是一个用 [MyGo](https://github.com/egoist/mygo) 和
-[CrychicUI](https://github.com/ELY-Open-Source/CrychicUI) 构建的轻量级跨平台华硕游戏本控制中心。Linux 和 Windows 共用同一套界面和控件，Linux 端对接 [asusd](https://gitlab.com/asus-linux/asusctl)，Windows 端对接 [G-Helper](https://github.com/seerge/g-helper) 的 ACPI 层。
+[CrychicUI](https://github.com/ELY-Open-Source/CrychicUI) 构建的轻量级跨平台华硕游戏本控制中心。Linux 和 Windows 共用同一套界面、控件和客户端窗口装饰（CSD），Linux 端对接 [asusd](https://gitlab.com/asus-linux/asusctl)，Windows 端对接 [G-Helper](https://github.com/seerge/g-helper) 的 ACPI 层。
 
-目前是 MVP 版本，提供性能模式、电池养护、风扇曲线、键盘灯效、显卡模式和整机信息（Linux），界面支持英文和简体中文。
+目前是 MVP 版本，两个平台都提供性能模式、电池养护、风扇曲线、键盘灯效、显卡模式和整机信息，界面支持英文和简体中文。
 
 ![概览界面](docs/screenshots/overview-light.png)
 
@@ -22,11 +22,13 @@ Zephyr Center 是一个用 [MyGo](https://github.com/egoist/mygo) 和
 - **风扇**：各性能模式下的 CPU 和 GPU 风扇曲线，可拖动八个控制点或用方向键
   编辑，也可启用、停用或恢复固件的默认设置。
 - **灯效**：针对 asusd 找到的 Aura 设备，可调节亮度、灯效、区域、速度、
-  方向、两种颜色和电源状态。
-- **显卡**：集成、混合和 Ultimate 三种模式；只有切换到 Ultimate 后才需要重启。
+  方向、两种颜色和电源状态。Windows 下通过 ASUS HID 或 ACPI 控制同一组设置。
+- **显卡**：集成、混合和 Ultimate 三种模式；两个平台都只有经过 Ultimate 的切换需要重启。
 - **系统**：型号、主板、BIOS、CPU、两块 GPU、内核和操作系统，以及 asusd
-  读取的固件属性。
+  读取的固件属性。Windows 从 WMI 填充相同字段，并补齐电池功耗、健康度、循环次数和剩余时间。
 - **关于**：版本信息、语言选择和许可证。
+- **托盘**：关闭窗口后应用继续在通知区域运行，可从托盘**打开 Zephyr 中心**
+  或**退出 Zephyr 中心**。Linux 和 Windows 使用同一个图标。
 
 窗口每两秒根据一次快照重绘，读数能保持实时，同时不会阻塞 UI 线程。所有写入都交给
 后端，不直接写 sysfs，因此在 Linux 上 asusd 仍是唯一的写入方。
@@ -61,6 +63,17 @@ ZEPHYR_SCREENSHOTS=docs/screenshots go test ./internal/app -run TestScreenshots
 该命令会生成所有页面的浅色和深色截图。仓库中的 `docs/screenshots`
 已收录其中一部分。
 
+## 托盘
+
+Linux 端使用 AppIndicator，需要安装 `libayatana-appindicator3` 运行库
+（Debian/Ubuntu 包名为 `libayatana-appindicator3-1`，Arch 为
+`libayatana-appindicator`）；旧版 `libappindicator3` 也可用。GNOME 还需要启用
+显示状态图标的扩展，例如 **AppIndicator and KStatusNotifierItem Support**；
+KDE Plasma、Xfce、Cinnamon 等桌面可直接显示。
+
+如果无法加载 `libayatana-appindicator3`，应用会记录托盘创建失败，并
+保留关闭按钮的正常行为，而不是把窗口藏起来后无法找回。
+
 ## Windows
 
 Windows 版本会启动 `zephyr-center-helper.exe`。这是一个小型控制台程序，
@@ -75,10 +88,29 @@ Windows 版本会启动 `zephyr-center-helper.exe`。这是一个小型控制台
 `dist/windows/`。在这个目录中运行 `zephyr-center.exe`。和 G-Helper 一样，
 它需要 ASUS ATKACPI 驱动。
 
-目前 MVP 的桥接层覆盖性能模式、充电上限、风扇曲线、功耗限制和显卡模式。
-Windows 端的灯效尚未接入；每个模式下的“使用自定义曲线”开关仅在 Linux 上可用，
-G-Helper 后端会把这类操作报为不支持，而不是假装执行成功。PPD 预设绑定同样仅限
-Linux，因为 power-profiles-daemon 在 Windows 上没有对应实现。
+桥接层覆盖性能模式、充电上限、各模式风扇曲线及其“使用自定义曲线”开关和恢复默认、
+功耗限制、显卡模式（含 MUX 直连切换）、键盘灯效，以及系统和电池详情。Windows
+下由 helper 记住各模式的曲线，并在模式切换时重新应用已启用的曲线。PPD 预设绑定
+仍仅限 Linux，因为 power-profiles-daemon 在 Windows 上没有对应实现。
+
+两个平台都使用客户端窗口装饰：应用自己绘制最小化、最大化和关闭按钮，并隐藏系统
+自带的窗口按钮，因此 Windows 的标题栏按钮不会再遮住内容。
+
+## 图标
+
+应用图标和托盘图标都来自
+`data/io.github.ne0w0r1d.ZephyrCenter.svg`。生成的资源包括：
+
+- `data/icons/hicolor`：Linux 图标主题，覆盖 16x16 到 512x512，并包含可缩放 SVG；
+- `data/windows/zephyr-center.ico`：包含常用尺寸的 Windows 图标；
+- `cmd/zephyr-center/rsrc_windows_amd64.syso`：编进 Windows 可执行文件的同一图标；
+- `internal/appicon`：嵌入 Go 程序的窗口与托盘 PNG。
+
+修改 SVG 后，使用 ImageMagick、Pillow 和 `go-winres` 重新生成：
+
+```sh
+./scripts/build-icons.sh
+```
 
 ## 构建
 
@@ -133,5 +165,5 @@ windows/bridge            the GPL-3.0 Windows helper, built on G-Helper
 
 ## MVP 暂未包含
 
-Anime Matrix、Slash 灯效、ROG Ally 和 XG Mobile、单键 Aura、托盘集成、通知、
-全局快捷键和开机自启。上游项目具备这些功能；这次重写先从用户日常会调整的设置做起。
+Anime Matrix、Slash 灯效、ROG Ally 和 XG Mobile、单键 Aura、通知、全局快捷键
+和开机自启。上游项目具备这些功能；这次重写先从用户日常会调整的设置做起。

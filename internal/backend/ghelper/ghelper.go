@@ -85,12 +85,24 @@ func (b *Backend) start() error {
 
 // request is one line of the bridge's protocol.
 type request struct {
-	Op    string  `json:"op"`
-	Name  string  `json:"name,omitempty"`
-	Value int     `json:"value,omitempty"`
-	Fan   string  `json:"fan,omitempty"`
-	Temp  []uint8 `json:"temp,omitempty"`
-	PWM   []uint8 `json:"pwm,omitempty"`
+	Op        string  `json:"op"`
+	Name      string  `json:"name,omitempty"`
+	Value     int     `json:"value,omitempty"`
+	Profile   string  `json:"profile,omitempty"`
+	Fan       string  `json:"fan,omitempty"`
+	Temp      []uint8 `json:"temp,omitempty"`
+	PWM       []uint8 `json:"pwm,omitempty"`
+	Enabled   bool    `json:"enabled,omitempty"`
+	Mode      uint32  `json:"mode,omitempty"`
+	Zone      uint32  `json:"zone,omitempty"`
+	Color1    []uint8 `json:"color1,omitempty"`
+	Color2    []uint8 `json:"color2,omitempty"`
+	Speed     string  `json:"speed,omitempty"`
+	Direction string  `json:"direction,omitempty"`
+	Boot      bool    `json:"boot,omitempty"`
+	Awake     bool    `json:"awake,omitempty"`
+	Sleep     bool    `json:"sleep,omitempty"`
+	Shutdown  bool    `json:"shutdown,omitempty"`
 }
 
 // response is the bridge's reply.
@@ -107,8 +119,14 @@ type response struct {
 type wireSnap struct {
 	Connected       bool                   `json:"connected"`
 	Model           string                 `json:"model"`
+	Board           string                 `json:"board"`
 	BIOS            string                 `json:"bios"`
+	BIOSDate        string                 `json:"bios_date"`
 	CPU             string                 `json:"cpu"`
+	IGPU            string                 `json:"igpu"`
+	DGPU            string                 `json:"dgpu"`
+	Kernel          string                 `json:"kernel"`
+	OS              string                 `json:"os"`
 	Profile         string                 `json:"profile"`
 	ProfileChoices  []string               `json:"profile_choices"`
 	ChargeLimit     int                    `json:"charge_limit"`
@@ -116,6 +134,7 @@ type wireSnap struct {
 	Sensors         wireSensors            `json:"sensors"`
 	Battery         wireBattery            `json:"battery"`
 	GPU             wireGPU                `json:"gpu"`
+	Aura            wireAura               `json:"aura"`
 	Features        map[string]wireFeature `json:"features"`
 	Curves          map[string][]wireCurve `json:"curves"`
 }
@@ -135,6 +154,7 @@ type wireBattery struct {
 	PowerW   float64 `json:"power_w"`
 	Health   float64 `json:"health"`
 	Cycles   int     `json:"cycles"`
+	TimeLeft string  `json:"time_left"`
 }
 
 type wireGPU struct {
@@ -143,6 +163,36 @@ type wireGPU struct {
 	Modes     []string `json:"modes"`
 	Pending   string   `json:"pending"`
 	Reboot    bool     `json:"reboot"`
+}
+
+type wireAura struct {
+	Supported    bool         `json:"supported"`
+	Modes        []uint32     `json:"modes"`
+	Brightness   uint32       `json:"brightness"`
+	Brightnesses []uint32     `json:"brightnesses"`
+	Mode         wireAuraMode `json:"mode"`
+	Power        []wireAuraOn `json:"power"`
+	PowerZones   []uint32     `json:"power_zones"`
+	Zones        []uint32     `json:"zones"`
+	DeviceType   uint32       `json:"device_type"`
+	Path         string       `json:"path"`
+}
+
+type wireAuraMode struct {
+	Mode      uint32  `json:"mode"`
+	Zone      uint32  `json:"zone"`
+	Color1    []uint8 `json:"color1"`
+	Color2    []uint8 `json:"color2"`
+	Speed     string  `json:"speed"`
+	Direction string  `json:"direction"`
+}
+
+type wireAuraOn struct {
+	Zone     uint32 `json:"zone"`
+	Boot     bool   `json:"boot"`
+	Awake    bool   `json:"awake"`
+	Sleep    bool   `json:"sleep"`
+	Shutdown bool   `json:"shutdown"`
 }
 
 type wireFeature struct {
@@ -225,10 +275,13 @@ func (b *Backend) Snapshot(ctx context.Context) (backend.Snapshot, error) {
 func convert(resp response) backend.Snapshot {
 	w := resp.Snapshot
 	s := backend.Snapshot{
-		Backend:         "ghelper",
-		Version:         resp.Version,
-		DaemonVersion:   resp.DaemonVersion,
-		Info:            backend.SystemInfo{Product: w.Model, BIOS: w.BIOS, CPU: w.CPU},
+		Backend:       "ghelper",
+		Version:       resp.Version,
+		DaemonVersion: resp.DaemonVersion,
+		Info: backend.SystemInfo{
+			Product: w.Model, Board: w.Board, BIOS: w.BIOS, BIOSDate: w.BIOSDate,
+			CPU: w.CPU, IGPU: w.IGPU, DGPU: w.DGPU, Kernel: w.Kernel, OS: w.OS,
+		},
 		Profile:         backend.Profile(w.Profile),
 		ChargeLimit:     w.ChargeLimit,
 		ChargeSupported: w.ChargeSupported,
@@ -239,6 +292,7 @@ func convert(resp response) backend.Snapshot {
 		Battery: backend.Battery{
 			Present: w.Battery.Present, Capacity: w.Battery.Capacity, Status: w.Battery.Status,
 			PowerW: w.Battery.PowerW, Health: w.Battery.Health, Cycles: w.Battery.Cycles,
+			TimeLeft: w.Battery.TimeLeft,
 		},
 		GPU: backend.GPUState{
 			Supported: w.GPU.Supported, Mode: backend.GPUMode(w.GPU.Mode), Pending: backend.GPUMode(w.GPU.Pending),
@@ -246,6 +300,7 @@ func convert(resp response) backend.Snapshot {
 		},
 		Features: map[string]backend.Feature{},
 		Curves:   map[backend.Profile][]backend.FanCurve{},
+		Aura:     convertAura(w.Aura),
 	}
 	for _, p := range w.ProfileChoices {
 		s.ProfileChoices = append(s.ProfileChoices, backend.Profile(p))
@@ -271,6 +326,41 @@ func convert(resp response) backend.Snapshot {
 		}
 	}
 	return s
+}
+
+// convertAura maps the bridge's lighting state into the app's.
+func convertAura(w wireAura) backend.AuraState {
+	st := backend.AuraState{
+		Supported:    w.Supported,
+		Modes:        w.Modes,
+		Brightness:   w.Brightness,
+		Brightnesses: w.Brightnesses,
+		Zones:        w.Zones,
+		PowerZones:   w.PowerZones,
+		DeviceType:   w.DeviceType,
+		Path:         w.Path,
+		Mode: backend.AuraMode{
+			Mode:      w.Mode.Mode,
+			Zone:      w.Mode.Zone,
+			Color1:    rgb3(w.Mode.Color1),
+			Color2:    rgb3(w.Mode.Color2),
+			Speed:     w.Mode.Speed,
+			Direction: w.Mode.Direction,
+		},
+	}
+	for _, p := range w.Power {
+		st.Power = append(st.Power, backend.AuraPower{
+			Zone: p.Zone, Boot: p.Boot, Awake: p.Awake, Sleep: p.Sleep, Shutdown: p.Shutdown,
+		})
+	}
+	return st
+}
+
+// rgb3 reads an RGB triplet, defaulting missing channels to zero.
+func rgb3(v []uint8) [3]byte {
+	var out [3]byte
+	copy(out[:], v)
+	return out
 }
 
 // SetProfile implements backend.Backend.
@@ -303,20 +393,22 @@ func (b *Backend) SetFeature(ctx context.Context, name string, value int) error 
 // SetFanCurve implements backend.Backend.
 func (b *Backend) SetFanCurve(ctx context.Context, profile backend.Profile, c backend.FanCurve) error {
 	_, err := b.call(ctx, request{
-		Op: "set_fan_curve", Fan: c.Fan,
-		Temp: c.Temp[:], PWM: c.PWM[:],
+		Op: "set_fan_curve", Profile: string(profile), Fan: c.Fan,
+		Temp: c.Temp[:], PWM: c.PWM[:], Enabled: c.Enabled,
 	})
 	return err
 }
 
 // SetFanCurvesEnabled implements backend.Backend.
 func (b *Backend) SetFanCurvesEnabled(ctx context.Context, profile backend.Profile, enabled bool) error {
-	return errors.New("ghelper: per-profile custom curves are not in the MVP bridge")
+	_, err := b.call(ctx, request{Op: "set_fan_curves_enabled", Profile: string(profile), Enabled: enabled})
+	return err
 }
 
 // ResetFanCurves implements backend.Backend.
 func (b *Backend) ResetFanCurves(ctx context.Context, profile backend.Profile) error {
-	return errors.New("ghelper: resetting curves is not in the MVP bridge")
+	_, err := b.call(ctx, request{Op: "reset_fan_curves", Profile: string(profile)})
+	return err
 }
 
 // SetGPUMode implements backend.Backend.
@@ -328,19 +420,28 @@ func (b *Backend) SetGPUMode(ctx context.Context, mode backend.GPUMode) error {
 	return err
 }
 
-// Aura is not part of the MVP Windows bridge.
-
 // SetAura implements backend.Backend.
 func (b *Backend) SetAura(ctx context.Context, m backend.AuraMode) error {
-	return errors.New("ghelper: lighting is not in the MVP bridge")
+	_, err := b.call(ctx, request{
+		Op: "set_aura", Mode: m.Mode, Zone: m.Zone,
+		Color1: []uint8{m.Color1[0], m.Color1[1], m.Color1[2]},
+		Color2: []uint8{m.Color2[0], m.Color2[1], m.Color2[2]},
+		Speed:  m.Speed, Direction: m.Direction,
+	})
+	return err
 }
 
 // SetAuraBrightness implements backend.Backend.
 func (b *Backend) SetAuraBrightness(ctx context.Context, v uint32) error {
-	return errors.New("ghelper: lighting is not in the MVP bridge")
+	_, err := b.call(ctx, request{Op: "set_aura_brightness", Value: int(v)})
+	return err
 }
 
 // SetAuraPower implements backend.Backend.
 func (b *Backend) SetAuraPower(ctx context.Context, p backend.AuraPower) error {
-	return errors.New("ghelper: lighting is not in the MVP bridge")
+	_, err := b.call(ctx, request{
+		Op: "set_aura_power", Zone: p.Zone,
+		Boot: p.Boot, Awake: p.Awake, Sleep: p.Sleep, Shutdown: p.Shutdown,
+	})
+	return err
 }

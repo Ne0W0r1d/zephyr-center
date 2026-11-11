@@ -49,6 +49,7 @@
   "overview.battery_care": "Battery care",
   "overview.battery_health": "Health",
   "overview.battery_cycles": "Cycles",
+  "overview.battery_power": "Power",
   "overview.battery_time": "Time left",
   "overview.battery_charging": "Charging",
   "overview.battery_discharging": "On battery",
@@ -249,6 +250,13 @@
   "app.refresh": "Refresh",
   "app.mute": "Mute sound effects",
   "app.unmute": "Unmute sound effects",
+  "app.minimize": "Minimize",
+  "app.maximize": "Maximize",
+  "app.restore": "Restore",
+  "app.close": "Close",
   "app.backend_offline": "asusd is not reachable. Is the service running?",
-  "app.updated": "Updated"
+  "app.updated": "Updated",
+
+  "tray.open": "Open Zephyr Center",
+  "tray.quit": "Quit Zephyr Center"
 }

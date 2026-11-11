@@ -103,6 +103,9 @@ func (a *App) batteryCard(c *ui.Context, s backend.Snapshot) {
 		ui.Row(c).Gap(24).Children(func() {
 			stat(c, i18n.T(c, "overview.battery_health"), percent(b.Health))
 			stat(c, i18n.T(c, "overview.battery_cycles"), strconv.Itoa(b.Cycles))
+			if b.PowerW > 0 {
+				stat(c, i18n.T(c, "overview.battery_power"), fmt.Sprintf("%.1f W", b.PowerW))
+			}
 			if b.TimeLeft != "" {
 				stat(c, i18n.T(c, "overview.battery_time"), b.TimeLeft)
 			}
@@ -630,6 +633,7 @@ func (a *App) systemPage(c *ui.Context, s backend.Snapshot) {
 			{Key: i18n.T(c, "system.igpu"), Value: s.Info.IGPU},
 			{Key: i18n.T(c, "system.dgpu"), Value: s.Info.DGPU},
 			{Key: i18n.T(c, "system.bios"), Value: s.Info.BIOS},
+			{Key: i18n.T(c, "system.bios_date"), Value: s.Info.BIOSDate},
 			{Key: i18n.T(c, "system.kernel"), Value: s.Info.Kernel},
 			{Key: i18n.T(c, "system.os"), Value: s.Info.OS},
 			{Key: i18n.T(c, "system.backend"), Value: s.Backend},
@@ -911,10 +915,7 @@ func batteryStatus(c *ui.Context, b backend.Battery) string {
 
 // batteryState is the badge on the battery card.
 func batteryState(c *ui.Context, b backend.Battery) string {
-	if b.Status == "Discharging" {
-		return i18n.T(c, "overview.battery_discharging")
-	}
-	return i18n.T(c, "overview.battery_charging")
+	return batteryStatus(c, b)
 }
 
 // stat is one labelled number.

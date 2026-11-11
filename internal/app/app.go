@@ -25,6 +25,7 @@ type App struct {
 
 	mu         sync.Mutex
 	invalidate func()
+	window     windowControl
 	toastKey   string
 	toastText  string
 	profile    *backend.Profile

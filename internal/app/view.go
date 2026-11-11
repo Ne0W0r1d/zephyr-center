@@ -88,6 +88,8 @@ func (a *App) header(c *ui.Context, s backend.Snapshot) {
 		if button.IconButton(c, i18n.T(c, "app.refresh"), "refresh-cw").Clicked() {
 			go a.refresh()
 		}
+		ui.Box(c).Width(1).Height(c.Theme().Space(5)).Background(c.Theme().Border)
+		a.windowButtons(c)
 	})
 	bar.DragWindow()
 	divider(c)

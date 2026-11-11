@@ -20,5 +20,7 @@ GOOS=windows GOARCH=amd64 go build -trimpath \
   -ldflags "-s -w -X main.version=$version" \
   -o "$out/zephyr-center.exe" "$root/cmd/zephyr-center"
 
+cp "$root/data/windows/zephyr-center.ico" "$out/zephyr-center.ico"
+
 echo "wrote $out"
 ls -1 "$out"

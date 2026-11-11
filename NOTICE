@@ -19,3 +19,8 @@ MyGo
 CrychicUI
   MIT License
   https://github.com/ELY-Open-Source/CrychicUI
+
+HidSharpCore
+  Apache License 2.0
+  https://github.com/OpenTabletDriver/HIDSharpCore
+  Used by the Windows bridge for the ASUS Aura HID reports.

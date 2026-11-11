@@ -37,6 +37,10 @@ public sealed class AsusACPI
     public const uint CPU_Fan = 0x00110013;
     public const uint GPU_Fan = 0x00110014;
     public const uint Mid_Fan = 0x00110031;
+    public const int TUF_KB_BRIGHTNESS = 0x00050021;
+    public const int TUF_KB = 0x00100056;
+    public const int TUF_KB2 = 0x0010005A;
+    public const int TUF_KB_STATE = 0x00100057;
     public const int BootSound = 0x00130022;
     public const int PPT_APUA3 = 0x001200A3;
     public const int PPT_APUA0 = 0x001200A0;

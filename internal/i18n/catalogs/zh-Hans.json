@@ -49,6 +49,7 @@
   "overview.battery_care": "电池保护",
   "overview.battery_health": "健康度",
   "overview.battery_cycles": "循环次数",
+  "overview.battery_power": "功耗",
   "overview.battery_time": "剩余时间",
   "overview.battery_charging": "充电中",
   "overview.battery_discharging": "使用电池",
@@ -249,6 +250,13 @@
   "app.refresh": "刷新",
   "app.mute": "关闭音效",
   "app.unmute": "开启音效",
+  "app.minimize": "最小化",
+  "app.maximize": "最大化",
+  "app.restore": "还原",
+  "app.close": "关闭",
   "app.backend_offline": "无法连接 asusd，服务是否在运行？",
-  "app.updated": "已更新"
+  "app.updated": "已更新",
+
+  "tray.open": "打开 Zephyr 中心",
+  "tray.quit": "退出 Zephyr 中心"
 }

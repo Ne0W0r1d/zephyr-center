@@ -48,16 +48,28 @@ func main() {
 	a.Start()
 
 	mygo.App.WhenReady(func() {
-		mygo.NewWindow(mygo.WindowOptions{
-			Title:          "Zephyr Center",
-			Width:          1180,
-			Height:         800,
-			MinWidth:       900,
-			MinHeight:      600,
-			TitleBarStyle:  mygo.TitleBarHidden,
-			TitleBarHeight: 52,
-			Content:        ui.View(a.View),
-		})
+		opts := mygo.WindowOptions{
+			Title:             "Zephyr Center",
+			Width:             1180,
+			Height:            800,
+			MinWidth:          900,
+			MinHeight:         600,
+			TitleBarStyle:     mygo.TitleBarHidden,
+			TitleBarHeight:    52,
+			HideWindowButtons: true,
+			Content:           ui.View(a.View),
+		}
+		if runtime.GOOS == "linux" {
+			// KWin and other Wayland compositors that prefer SSD keep
+			// their own title bar for TitleBarHidden. A frameless window
+			// makes GTK decorate itself instead, so only our CSD shows.
+			opts.Frameless = true
+			opts.TitleBarStyle = mygo.TitleBarDefault
+			opts.TitleBarHeight = 0
+		}
+		win := mygo.NewWindow(opts)
+		a.AttachWindow(win)
+		attachTray(win)
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

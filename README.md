@@ -5,7 +5,7 @@
 A lightweight, cross-platform ROG Control Center built with
 [MyGo](https://github.com/egoist/mygo) and
 [CrychicUI](https://github.com/ELY-Open-Source/CrychicUI): one view with the
-same controls on Linux and Windows, talking to
+same controls and client-side window decorations on Linux and Windows, talking to
 [asusd](https://gitlab.com/asus-linux/asusctl) on Linux and
 [G-Helper](https://github.com/seerge/g-helper)'s ACPI layer on Windows.
 
@@ -31,12 +31,17 @@ The same view in the dark theme:
   eight points or with the arrow keys, with enable/disable and restore to
   the firmware's defaults.
 - **Lighting** — brightness, effect, zone, speed, direction, two colours and
-  the power states, for the Aura device asusd finds.
+  the power states, on both Aura devices asusd finds and ASUS HID keyboards
+  under Windows.
 - **Graphics** — integrated, hybrid and ultimate; only a switch through
-  ultimate needs a restart.
+  ultimate needs a restart, on both platforms.
 - **System** — model, board, BIOS, CPU, both GPUs, kernel and OS, plus the
-  firmware attributes asusd reads.
+  firmware attributes asusd reads. Windows fills the same fields from WMI,
+  including the battery's power draw, health, cycles and time left.
 - **About** — versions, the language picker, and the licences.
+- **Tray** — closing the window keeps the app running in the notification
+  area, where **Open Zephyr Center** brings it back and **Quit Zephyr
+  Center** exits. Linux and Windows use the same icon.
 
 The window redraws from a snapshot every two seconds, so the readings stay
 live without blocking the UI thread. Every write goes to the backend, not to
@@ -72,6 +77,19 @@ ZEPHYR_SCREENSHOTS=docs/screenshots go test ./internal/app -run TestScreenshots
 That writes every page, in light and dark. A few are checked in under
 `docs/screenshots`.
 
+## Tray
+
+The tray icon uses AppIndicator on Linux, so the desktop needs the
+`libayatana-appindicator3` runtime library (on Debian and Ubuntu,
+`libayatana-appindicator3-1`; Arch has `libayatana-appindicator`). The older
+`libappindicator3` works too. GNOME also needs an extension that shows status
+icons, such as **AppIndicator and KStatusNotifierItem Support**. KDE Plasma,
+Xfce, Cinnamon and most other desktops show it directly.
+
+If `libayatana-appindicator3` cannot be loaded, the app logs that the
+tray could not be created and keeps the window's close button working
+normally instead of hiding the app with no way back.
+
 ## Windows
 
 The Windows build launches `zephyr-center-helper.exe`, a small console program
@@ -86,12 +104,35 @@ The script publishes `windows/bridge` with `dotnet` and cross-compiles the Go
 app, putting both files in `dist/windows/`. Run `zephyr-center.exe` from that
 directory. It needs the ASUS ATKACPI driver, as G-Helper does.
 
-The MVP bridge covers profiles, charge limit, fan curves, power limits and
-graphics modes. Lighting on Windows is not wired yet, and the per-profile
-"use a custom curve" toggle is Linux-only; the G-Helper backend reports those
-actions as unsupported rather than pretending they worked. PPD preset
-binding is Linux-only too, since power-profiles-daemon has no Windows
-counterpart.
+The bridge covers profiles, charge limit, per-profile fan curves with the
+"use a custom curve" toggle and restore, power limits, graphics modes
+including the MUX, keyboard lighting over ASUS HID or ACPI, and the system
+and battery details. On Windows the helper remembers per-profile curves and
+reapplies the enabled one when the profile changes. PPD preset binding is
+Linux-only, since power-profiles-daemon has no Windows counterpart.
+
+Both builds use client-side decorations: the app draws its own minimize,
+maximize and close controls, and the system's window buttons are hidden. This
+keeps the Windows caption buttons from covering the content.
+
+## Icons
+
+The application and tray icon come from
+`data/io.github.ne0w0r1d.ZephyrCenter.svg`. The generated assets are:
+
+- `data/icons/hicolor`: the Linux icon theme, from 16x16 to 512x512 plus the
+  scalable SVG;
+- `data/windows/zephyr-center.ico`: the Windows icon at every common size;
+- `cmd/zephyr-center/rsrc_windows_amd64.syso`: the same icon compiled into
+  the Windows executable;
+- `internal/appicon`: the window and tray PNGs embedded in the Go binary.
+
+After changing the SVG, regenerate them with ImageMagick, Pillow and
+`go-winres`:
+
+```sh
+./scripts/build-icons.sh
+```
 
 ## Builds
 
@@ -150,6 +191,5 @@ windows/bridge            the GPL-3.0 Windows helper, built on G-Helper
 ## Not in the MVP
 
 Anime Matrix, the Slash lighting, the ROG Ally and XG Mobile, per-key Aura,
-tray integration, notifications, the global shortcut and autostart. The
-upstream projects have them; this rewrite starts with the settings people
-touch every day.
+notifications, the global shortcut and autostart. The upstream projects have
+them; this rewrite starts with the settings people touch every day.

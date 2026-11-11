@@ -1,0 +1,15 @@
+{
+  "RT_GROUP_ICON": {
+    "APP": {
+      "0000": [
+        "../icons/hicolor/16x16/apps/io.github.ne0w0r1d.ZephyrCenter.png",
+        "../icons/hicolor/24x24/apps/io.github.ne0w0r1d.ZephyrCenter.png",
+        "../icons/hicolor/32x32/apps/io.github.ne0w0r1d.ZephyrCenter.png",
+        "../icons/hicolor/48x48/apps/io.github.ne0w0r1d.ZephyrCenter.png",
+        "../icons/hicolor/64x64/apps/io.github.ne0w0r1d.ZephyrCenter.png",
+        "../icons/hicolor/128x128/apps/io.github.ne0w0r1d.ZephyrCenter.png",
+        "../icons/hicolor/256x256/apps/io.github.ne0w0r1d.ZephyrCenter.png"
+      ]
+    }
+  }
+}
