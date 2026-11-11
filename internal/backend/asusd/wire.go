@@ -19,6 +19,19 @@ const (
 	armoury   = "xyz.ljones.AsusArmoury"
 )
 
+// ppdTarget is one D-Bus endpoint power-profiles-daemon has used. Newer
+// releases live under UPower, older ones under net.hadess.
+type ppdTarget struct {
+	service string
+	path    string
+	iface   string
+}
+
+var ppdTargets = []ppdTarget{
+	{"org.freedesktop.UPower.PowerProfiles", "/org/freedesktop/UPower/PowerProfiles", "org.freedesktop.UPower.PowerProfiles"},
+	{"net.hadess.PowerProfiles", "/net/hadess/PowerProfiles", "net.hadess.PowerProfiles"},
+}
+
 // auraModeWire is LedModeData as D-Bus delivers it: (uu(yyy)(yyy)ss).
 //
 // The two colors arrive as arrays of variants, not []byte, so they are

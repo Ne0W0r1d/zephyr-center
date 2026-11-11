@@ -58,3 +58,22 @@ func TestColor3(t *testing.T) {
 		t.Errorf("color3(nil) = %v, want zero", got)
 	}
 }
+
+func TestPPDProfilesReadsTheDaemonDict(t *testing.T) {
+	v := dbus.MakeVariant([]map[string]dbus.Variant{
+		{"Profile": dbus.MakeVariant("power-saver")},
+		{"Profile": dbus.MakeVariant("balanced")},
+		{"Profile": dbus.MakeVariant("balanced")},
+		{"Profile": dbus.MakeVariant("performance")},
+	})
+	got := ppdProfiles(v)
+	want := []backend.PPDPreset{backend.PPDPowerSaver, backend.PPDBalanced, backend.PPDPerformance}
+	if len(got) != len(want) {
+		t.Fatalf("ppdProfiles = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("preset %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

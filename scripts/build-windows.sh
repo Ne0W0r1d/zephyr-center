@@ -7,16 +7,18 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 out="$root/dist/windows"
+version=${VERSION:-0.1.0}
 mkdir -p "$out"
 
 echo "building the bridge"
 dotnet publish "$root/windows/bridge/ZephyrBridge.csproj" \
   -c Release -r win-x64 --self-contained false \
-  -p:PublishSingleFile=true -o "$out"
+  -p:PublishSingleFile=true -p:Version="$version" -o "$out"
 
 echo "building the app"
 GOOS=windows GOARCH=amd64 go build -trimpath \
-  -ldflags "-s -w" -o "$out/zephyr-center.exe" "$root/cmd/zephyr-center"
+  -ldflags "-s -w -X main.version=$version" \
+  -o "$out/zephyr-center.exe" "$root/cmd/zephyr-center"
 
 echo "wrote $out"
 ls -1 "$out"

@@ -1,0 +1,159 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v[0-9]*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      channel: ${{ steps.version.outputs.channel }}
+    steps:
+      - id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            version=${REF_NAME#v}
+            channel=release
+          else
+            version="0.0.0-rolling.$(date -u +%Y%m%d).${SHA:0:7}"
+            channel=rolling
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+  build-linux:
+    needs: meta
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        run: ./scripts/build-linux.sh
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+      - name: Package
+        run: tar -C dist/linux -czf dist/zephyr-center-linux-amd64.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-amd64
+          path: dist/zephyr-center-linux-amd64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  build-windows:
+    needs: meta
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build
+        run: ./scripts/build-windows.sh
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+      - name: Package
+        run: |
+          cp LICENSE NOTICE dist/windows/
+          rm -f dist/windows/*.pdb
+          (cd dist/windows && zip -qr ../zephyr-center-windows-amd64.zip .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64
+          path: dist/zephyr-center-windows-amd64.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-rolling:
+    if: needs.meta.outputs.channel == 'rolling'
+    needs: [meta, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect assets
+        run: |
+          mkdir -p release
+          cp artifacts/linux-amd64/zephyr-center-linux-amd64.tar.gz release/
+          cp artifacts/windows-amd64/zephyr-center-windows-amd64.zip release/
+          (cd release && sha256sum zephyr-center-* > SHA256SUMS)
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          cat > notes.md <<EOF
+          Rolling build of \`main\` at [\`${GITHUB_SHA:0:7}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}).
+
+          - Version: \`${VERSION}\`
+          - Built: $(date -u "+%Y-%m-%d %H:%M UTC")
+
+          This release is replaced on every push to \`main\`. Use a \`v*\` tag for a stable build.
+          EOF
+          git tag -f rolling "$GITHUB_SHA"
+          git push -f origin refs/tags/rolling
+          if gh release view rolling --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload rolling --repo "$GITHUB_REPOSITORY" release/* --clobber
+            gh release edit rolling --repo "$GITHUB_REPOSITORY" \
+              --title "Rolling build" --notes-file notes.md --prerelease --latest=false
+          else
+            gh release create rolling --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Rolling build" --notes-file notes.md --prerelease --latest=false \
+              release/*
+          fi
+
+  publish-release:
+    if: needs.meta.outputs.channel == 'release'
+    needs: [meta, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect assets
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          mkdir -p release
+          mv artifacts/linux-amd64/zephyr-center-linux-amd64.tar.gz \
+            "release/zephyr-center-${VERSION}-linux-amd64.tar.gz"
+          mv artifacts/windows-amd64/zephyr-center-windows-amd64.zip \
+            "release/zephyr-center-${VERSION}-windows-amd64.zip"
+          (cd release && sha256sum zephyr-center-* > SHA256SUMS)
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" release/* --clobber
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Zephyr Center $TAG" --generate-notes release/*
+          fi

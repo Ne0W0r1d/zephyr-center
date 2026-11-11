@@ -1,5 +1,7 @@
 # Zephyr Center
 
+<p align="center">English | <a href="README.zh-Hans.md">简体中文</a></p>
+
 A lightweight, cross-platform ROG Control Center built with
 [MyGo](https://github.com/egoist/mygo) and
 [CrychicUI](https://github.com/ELY-Open-Source/CrychicUI): one view with the
@@ -19,12 +21,12 @@ The same view in the dark theme:
 
 ## What works
 
-- **Overview** — the profile, battery charge/health/draw, CPU and GPU
-  temperatures and fan speeds, and the firmware switches (panel overdrive,
-  boot sound).
-- **Performance** — the platform profile, the charge limit, and the power
-  limits asusd exposes (PL1, PL2, NVIDIA dynamic boost and temperature
-  target).
+- **Overview** — the profile, battery charge/health/draw and charge limit,
+  CPU and GPU temperatures and fan speeds, and the firmware switches
+  (panel overdrive, boot sound).
+- **Performance** — the platform profile, the PPD presets each profile is
+  bound to, and the power limits asusd exposes (PL1, PL2, NVIDIA dynamic
+  boost and temperature target).
 - **Fans** — every profile's CPU and GPU fan curves, edited by dragging the
   eight points or with the arrow keys, with enable/disable and restore to
   the firmware's defaults.
@@ -87,7 +89,26 @@ directory. It needs the ASUS ATKACPI driver, as G-Helper does.
 The MVP bridge covers profiles, charge limit, fan curves, power limits and
 graphics modes. Lighting on Windows is not wired yet, and the per-profile
 "use a custom curve" toggle is Linux-only; the G-Helper backend reports those
-actions as unsupported rather than pretending they worked.
+actions as unsupported rather than pretending they worked. PPD preset
+binding is Linux-only too, since power-profiles-daemon has no Windows
+counterpart.
+
+## Builds
+
+GitHub Actions runs the tests and both builds on every push and pull request
+(`.github/workflows/ci.yml`).
+
+`.github/workflows/release.yml` publishes two kinds of release:
+
+- every push to `main` replaces the single **rolling** prerelease, tagged
+  `rolling`, with a snapshot of that commit;
+- pushing a version tag such as `v1.0.0` publishes a stable release with
+  versioned `linux-amd64` and `windows-amd64` archives.
+
+Both channels ship the same files and a `SHA256SUMS`. The version tag is
+embedded in the About page. To produce the bundles locally, run
+`./scripts/build-linux.sh` or `./scripts/build-windows.sh` with
+`VERSION=1.2.3`.
 
 ## Languages
 

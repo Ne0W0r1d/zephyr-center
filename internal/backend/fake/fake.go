@@ -49,6 +49,11 @@ func New() *Backend {
 		ProfileChoices:  []backend.Profile{backend.ProfileQuiet, backend.ProfileBalanced, backend.ProfilePerformance},
 		ChargeLimit:     80,
 		ChargeSupported: true,
+		PPD: backend.PPDState{
+			Supported: true,
+			Active:    backend.PPDBalanced,
+			Profiles:  append([]backend.PPDPreset(nil), backend.PPDPresets...),
+		},
 		GPU: backend.GPUState{
 			Supported: true, Mode: backend.GPUModeHybrid,
 			Modes: []backend.GPUMode{backend.GPUModeIntegrated, backend.GPUModeHybrid, backend.GPUModeUltimate},
@@ -130,6 +135,22 @@ func (b *Backend) SetProfile(ctx context.Context, p backend.Profile) error {
 		}
 	}
 	return fmt.Errorf("fake: profile %q is not offered", p)
+}
+
+// SetPPDPreset implements backend.Backend.
+func (b *Backend) SetPPDPreset(ctx context.Context, preset backend.PPDPreset) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.snap.PPD.Supported {
+		return fmt.Errorf("fake: power-profiles-daemon is not available")
+	}
+	for _, p := range b.snap.PPD.Profiles {
+		if p == preset {
+			b.snap.PPD.Active = preset
+			return nil
+		}
+	}
+	return fmt.Errorf("fake: PPD preset %q is not offered", preset)
 }
 
 // SetChargeLimit implements backend.Backend.

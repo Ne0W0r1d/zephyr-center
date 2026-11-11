@@ -120,6 +120,7 @@ func (b *Backend) Snapshot(ctx context.Context) (backend.Snapshot, error) {
 			snap.ChargeSupported = true
 		}
 	}
+	snap.PPD = b.ppdState()
 	snap.GPU = b.gpuState(root)
 	snap.Features = b.features(root)
 	snap.Curves = b.readCurves(root, snap.ProfileChoices)
@@ -137,6 +138,86 @@ func (b *Backend) SetProfile(ctx context.Context, p backend.Profile) error {
 		return err
 	}
 	return root.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Set", 0, platform, "PlatformProfile", dbus.MakeVariant(p.Code())).Err
+}
+
+// ppdObject finds power-profiles-daemon under whichever D-Bus name this
+// distribution uses.
+func (b *Backend) ppdObject() (dbus.BusObject, ppdTarget, error) {
+	conn, err := b.connOrErr()
+	if err != nil {
+		return nil, ppdTarget{}, err
+	}
+	for _, target := range ppdTargets {
+		obj := conn.Object(target.service, dbus.ObjectPath(target.path))
+		if _, err := obj.GetProperty(target.iface + ".ActiveProfile"); err == nil {
+			return obj, target, nil
+		}
+	}
+	return nil, ppdTarget{}, errors.New("asusd: power-profiles-daemon is not running")
+}
+
+// ppdState reads power-profiles-daemon's active preset and choices. A
+// machine without the daemon simply reports PPD as unsupported.
+func (b *Backend) ppdState() backend.PPDState {
+	var st backend.PPDState
+	obj, target, err := b.ppdObject()
+	if err != nil {
+		return st
+	}
+	st.Supported = true
+	v, err := obj.GetProperty(target.iface + ".ActiveProfile")
+	if err != nil {
+		return backend.PPDState{}
+	}
+	if name, ok := v.Value().(string); ok {
+		st.Active = backend.PPDPreset(name)
+	}
+	if v, err := obj.GetProperty(target.iface + ".Profiles"); err == nil {
+		st.Profiles = ppdProfiles(v)
+	}
+	if len(st.Profiles) == 0 {
+		st.Profiles = append([]backend.PPDPreset(nil), backend.PPDPresets...)
+	}
+	return st
+}
+
+// ppdProfiles reads the preset names out of PPD's Profiles property.
+func ppdProfiles(v dbus.Variant) []backend.PPDPreset {
+	raw, ok := v.Value().([]map[string]dbus.Variant)
+	if !ok {
+		return nil
+	}
+	seen := map[backend.PPDPreset]bool{}
+	var out []backend.PPDPreset
+	for _, entry := range raw {
+		value, ok := entry["Profile"]
+		if !ok {
+			continue
+		}
+		name, ok := value.Value().(string)
+		if !ok || name == "" {
+			continue
+		}
+		preset := backend.PPDPreset(name)
+		if seen[preset] {
+			continue
+		}
+		seen[preset] = true
+		out = append(out, preset)
+	}
+	return out
+}
+
+// SetPPDPreset implements backend.Backend.
+func (b *Backend) SetPPDPreset(ctx context.Context, preset backend.PPDPreset) error {
+	if !preset.Valid() {
+		return fmt.Errorf("asusd: PPD preset %q is not one of the daemon's presets", preset)
+	}
+	obj, target, err := b.ppdObject()
+	if err != nil {
+		return err
+	}
+	return obj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Set", 0, target.iface, "ActiveProfile", dbus.MakeVariant(string(preset))).Err
 }
 
 // SetChargeLimit implements backend.Backend.

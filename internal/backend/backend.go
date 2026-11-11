@@ -24,6 +24,44 @@ const (
 // Profiles lists every profile in display order.
 var Profiles = []Profile{ProfileQuiet, ProfileBalanced, ProfilePerformance, ProfileLowPower, ProfileCustom}
 
+// PPDPreset is one of power-profiles-daemon's presets.
+type PPDPreset string
+
+// The presets power-profiles-daemon ships.
+const (
+	PPDPowerSaver  PPDPreset = "power-saver"
+	PPDBalanced    PPDPreset = "balanced"
+	PPDPerformance PPDPreset = "performance"
+)
+
+// PPDPresets lists the presets in display order.
+var PPDPresets = []PPDPreset{PPDPowerSaver, PPDBalanced, PPDPerformance}
+
+// Label is the English name of the preset, for catalogs that have no
+// translation for it.
+func (p PPDPreset) Label() string {
+	switch p {
+	case PPDPowerSaver:
+		return "Power saver"
+	case PPDBalanced:
+		return "Balanced"
+	case PPDPerformance:
+		return "Performance"
+	default:
+		return string(p)
+	}
+}
+
+// Valid reports whether p is one of the presets the daemon ships.
+func (p PPDPreset) Valid() bool {
+	for _, q := range PPDPresets {
+		if p == q {
+			return true
+		}
+	}
+	return false
+}
+
 // Label is the English name of the profile, for catalogs that have no
 // translation for it.
 func (p Profile) Label() string {
@@ -180,6 +218,13 @@ type Battery struct {
 	TimeLeft string
 }
 
+// PPDState is what power-profiles-daemon reports.
+type PPDState struct {
+	Supported bool
+	Active    PPDPreset
+	Profiles  []PPDPreset
+}
+
 // Sensors are the live temperatures, fan speeds and CPU load.
 type Sensors struct {
 	CPUTemp  float64
@@ -217,6 +262,7 @@ type Snapshot struct {
 	ProfileChoices  []Profile
 	ChargeLimit     int
 	ChargeSupported bool
+	PPD             PPDState
 	GPU             GPUState
 	Features        map[string]Feature
 	Curves          map[Profile][]FanCurve
@@ -250,6 +296,7 @@ type Backend interface {
 	// Snapshot reads the machine. It may be called every few seconds.
 	Snapshot(ctx context.Context) (Snapshot, error)
 	SetProfile(ctx context.Context, p Profile) error
+	SetPPDPreset(ctx context.Context, preset PPDPreset) error
 	SetChargeLimit(ctx context.Context, limit int) error
 	SetFeature(ctx context.Context, name string, value int) error
 	SetAura(ctx context.Context, m AuraMode) error

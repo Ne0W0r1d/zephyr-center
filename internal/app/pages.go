@@ -66,8 +66,8 @@ func (a *App) profileCard(c *ui.Context, s backend.Snapshot) {
 
 // metricCard draws one measurement.
 func metricCard(c *ui.Context, label, value, sub, glyph string) {
-	ui.Column(c).Width(198).Children(func() {
-		settingsCard(c, func() {
+	ui.Column(c).Grow(1).Basis(198).Children(func() {
+		fillCard(c, func() {
 			ui.Row(c).Gap(c.Theme().Space(1.5)).AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, lucide(glyph)).Size(16, 16).TextColor(c.Theme().TextMuted)
 				caption(c, label)
@@ -81,7 +81,7 @@ func metricCard(c *ui.Context, label, value, sub, glyph string) {
 // batteryCard shows charge, health and draw.
 func (a *App) batteryCard(c *ui.Context, s backend.Snapshot) {
 	b := s.Battery
-	settingsCard(c, func() {
+	fillCard(c, func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Text(c, i18n.T(c, "overview.battery")).Bold().Grow(1)
 			if b.Present {
@@ -107,12 +107,61 @@ func (a *App) batteryCard(c *ui.Context, s backend.Snapshot) {
 				stat(c, i18n.T(c, "overview.battery_time"), b.TimeLeft)
 			}
 		})
+		if s.ChargeSupported {
+			divider(c)
+			a.batteryCare(c, s)
+		}
+		ui.Box(c).Grow(1)
+		if prev := a.chargeOnceLimit(); prev > 0 {
+			muted(c, i18n.TF(c, "overview.charge_once_running", map[string]any{"percent": prev}))
+		} else if s.ChargeSupported && s.ChargeLimit < 100 && b.Capacity < 100 {
+			ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
+				if button.Outline(c, i18n.T(c, "overview.charge_once")).Clicked() {
+					a.chargeToFull(s.ChargeLimit)
+				}
+			})
+		}
+	})
+}
+
+// batteryCare caps the battery's charge from the overview.
+func (a *App) batteryCare(c *ui.Context, s backend.Snapshot) {
+	if !a.chargeSet {
+		a.chargeDraft = float64(s.ChargeLimit)
+		a.chargeSet = true
+	}
+	if v := float64(s.ChargeLimit); v != a.chargeDraft && a.chargeDraft == 0 {
+		a.chargeDraft = v
+	}
+	if a.chargeDraft < 20 {
+		a.chargeDraft = 20
+	}
+	if a.chargeDraft > 100 {
+		a.chargeDraft = 100
+	}
+	limit := int(a.chargeDraft + 0.5)
+	ui.Column(c).FillWidth().Gap(c.Theme().Space(1)).Children(func() {
+		ui.Text(c, i18n.T(c, "overview.battery_care")).Bold()
+		caption(c, i18n.TF(c, "overview.charge_limit_desc", map[string]any{"percent": limit}))
+		ui.Row(c).FillWidth().Gap(c.Theme().Space(1.5)).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Grow(1).Basis(0).MinWidth(0).Children(func() {
+				sl := choice.ValueSlider(c, i18n.T(c, "overview.charge_limit"), &a.chargeDraft, 20, 100,
+					choice.ValueSliderOptions{Step: 1, Format: "%.0f%%"}).FillWidth()
+				if sl.Changed() {
+					next := int(a.chargeDraft + 0.5)
+					if next != s.ChargeLimit {
+						a.setCharge(next)
+					}
+				}
+			})
+			kit.Numeric(c, fmt.Sprintf("%d%%", limit)).Bold().Width(c.Theme().Rem(2.5)).TextAlign(ui.End)
+		})
 	})
 }
 
 // quickCard holds the switches for the firmware attributes that have one.
 func (a *App) quickCard(c *ui.Context, s backend.Snapshot) {
-	settingsCard(c, func() {
+	fillCard(c, func() {
 		ui.Text(c, i18n.T(c, "overview.quick")).Bold()
 		if hasFeature(s, "panel_overdrive") {
 			on := featureValue(s, "panel_overdrive") == 1
@@ -132,7 +181,7 @@ func (a *App) quickCard(c *ui.Context, s backend.Snapshot) {
 	})
 }
 
-// performancePage sets the profile, the charge limit and the power limits.
+// performancePage sets the profile, the PPD bindings and the power limits.
 func (a *App) performancePage(c *ui.Context, s backend.Snapshot) {
 	content(c, func() {
 		pageTitle(c, i18n.T(c, "performance.title"), i18n.T(c, "performance.subtitle"))
@@ -146,37 +195,57 @@ func (a *App) performancePage(c *ui.Context, s backend.Snapshot) {
 				a.setProfile(backend.Profile(sel))
 			}
 		})
-		a.chargeCard(c, s)
+		a.ppdCard(c, s)
 		a.powerCard(c, s)
 	})
 }
 
-// chargeCard caps the battery's charge.
-func (a *App) chargeCard(c *ui.Context, s backend.Snapshot) {
-	if !s.ChargeSupported {
-		return
-	}
-	if !a.chargeSet {
-		a.chargeDraft = float64(s.ChargeLimit)
-		a.chargeSet = true
-	}
-	if v := float64(s.ChargeLimit); v != a.chargeDraft && a.chargeDraft == 0 {
-		a.chargeDraft = v
-	}
-	section(c, i18n.T(c, "performance.charge"), i18n.T(c, "performance.charge_desc"), func() {
+// ppdCard binds each firmware profile to the PPD preset it switches to.
+func (a *App) ppdCard(c *ui.Context, s backend.Snapshot) {
+	section(c, i18n.T(c, "performance.ppd"), i18n.T(c, "performance.ppd_desc"), func() {
 		settingsCard(c, func() {
-			settingRow(c, i18n.T(c, "performance.charge_limit"), "", func() {
-				ui.Column(c).Width(c.Theme().Rem(22)).Children(func() {
-					sl := choice.ValueSlider(c, i18n.T(c, "performance.charge_limit"), &a.chargeDraft, 20, 100,
-						choice.ValueSliderOptions{Step: 1, Format: "%.0f%%"})
-					if sl.Changed() {
-						limit := int(a.chargeDraft + 0.5)
-						if limit != s.ChargeLimit {
-							a.setCharge(limit)
+			if !s.PPD.Supported {
+				muted(c, i18n.T(c, "performance.ppd_unavailable"))
+				return
+			}
+			rows := make([]func(), 0, len(s.ProfileChoices))
+			presets := s.PPD.Profiles
+			if len(presets) == 0 {
+				presets = backend.PPDPresets
+			}
+			for _, mode := range s.ProfileChoices {
+				mode := mode
+				rows = append(rows, func() {
+					bound := a.ppdBindingFor(mode)
+					names := []string{i18n.T(c, "performance.ppd_unbound")}
+					values := []backend.PPDPreset{""}
+					for _, preset := range presets {
+						names = append(names, ppdLabel(c, preset))
+						values = append(values, preset)
+					}
+					sel := names[0]
+					for i, preset := range values {
+						if preset == bound {
+							sel = names[i]
 						}
 					}
+					label := i18n.TF(c, "performance.ppd_mode", map[string]any{"mode": profileLabel(c, mode)})
+					settingRow(c, profileLabel(c, mode), "", func() {
+						if dropdown(c, label, names, &sel) {
+							for i, name := range names {
+								if name == sel {
+									a.setPPDBinding(mode, values[i])
+									break
+								}
+							}
+						}
+					})
 				})
-			})
+			}
+			grouped(c, rows)
+			caption(c, i18n.TF(c, "performance.ppd_now", map[string]any{
+				"preset": ppdLabel(c, s.PPD.Active),
+			}))
 		})
 	})
 }

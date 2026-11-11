@@ -37,6 +37,12 @@ func settingsCard(c *ui.Context, content func()) {
 	layout.Card(c, content)
 }
 
+// fillCard is a settingsCard that takes the height of a stretched column,
+// so cards beside each other end on the same line.
+func fillCard(c *ui.Context, content func()) {
+	layout.Card(c, content).Grow(1)
+}
+
 // muted is secondary text.
 func muted(c *ui.Context, s string) ui.Element {
 	return kit.Muted(c, s)

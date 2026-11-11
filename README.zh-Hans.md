@@ -1,0 +1,137 @@
+# Zephyr Center
+
+<p align="center"><a href="README.md">English</a> | 简体中文</p>
+
+Zephyr Center 是一个用 [MyGo](https://github.com/egoist/mygo) 和
+[CrychicUI](https://github.com/ELY-Open-Source/CrychicUI) 构建的轻量级跨平台华硕游戏本控制中心。Linux 和 Windows 共用同一套界面和控件，Linux 端对接 [asusd](https://gitlab.com/asus-linux/asusctl)，Windows 端对接 [G-Helper](https://github.com/seerge/g-helper) 的 ACPI 层。
+
+目前是 MVP 版本，提供性能模式、电池养护、风扇曲线、键盘灯效、显卡模式和整机信息（Linux），界面支持英文和简体中文。
+
+![概览界面](docs/screenshots/overview-light.png)
+
+深色主题下的同一界面：
+
+![概览界面，深色主题](docs/screenshots/overview-dark.png)
+
+## 已实现功能
+
+- **概览**：当前性能模式，电池电量、健康度和功耗，充电上限，CPU 和 GPU
+  温度与风扇转速，以及固件开关（面板超频、开机音效）。
+- **性能**：平台模式、各模式绑定的 PPD 预设，以及 asusd 提供的功耗限制
+  （PL1、PL2、NVIDIA 动态加速和温度目标）。
+- **风扇**：各性能模式下的 CPU 和 GPU 风扇曲线，可拖动八个控制点或用方向键
+  编辑，也可启用、停用或恢复固件的默认设置。
+- **灯效**：针对 asusd 找到的 Aura 设备，可调节亮度、灯效、区域、速度、
+  方向、两种颜色和电源状态。
+- **显卡**：集成、混合和 Ultimate 三种模式；只有切换到 Ultimate 后才需要重启。
+- **系统**：型号、主板、BIOS、CPU、两块 GPU、内核和操作系统，以及 asusd
+  读取的固件属性。
+- **关于**：版本信息、语言选择和许可证。
+
+窗口每两秒根据一次快照重绘，读数能保持实时，同时不会阻塞 UI 线程。所有写入都交给
+后端，不直接写 sysfs，因此在 Linux 上 asusd 仍是唯一的写入方。
+
+## 运行
+
+仓库地址为 `Ne0W0r1d/zephyr-center`，克隆到 `zephyr-center` 目录：
+
+```sh
+git clone https://github.com/Ne0W0r1d/zephyr-center
+cd zephyr-center
+```
+
+Linux 端需要先运行 `asusd`：
+
+```sh
+go run ./cmd/zephyr-center
+```
+
+没有 ASUS 硬件时，可以运行演示后端查看界面：
+
+```sh
+go run ./cmd/zephyr-center -demo
+```
+
+截图也由演示后端生成：
+
+```sh
+ZEPHYR_SCREENSHOTS=docs/screenshots go test ./internal/app -run TestScreenshots
+```
+
+该命令会生成所有页面的浅色和深色截图。仓库中的 `docs/screenshots`
+已收录其中一部分。
+
+## Windows
+
+Windows 版本会启动 `zephyr-center-helper.exe`。这是一个小型控制台程序，
+链接 G-Helper 的 `AsusACPI` ACPI 层，通过 stdin/stdout 收发 JSON。
+两个程序一起构建：
+
+```sh
+./scripts/build-windows.sh
+```
+
+脚本使用 `dotnet` 发布 `windows/bridge`，并交叉编译 Go 应用，两个产物都放进
+`dist/windows/`。在这个目录中运行 `zephyr-center.exe`。和 G-Helper 一样，
+它需要 ASUS ATKACPI 驱动。
+
+目前 MVP 的桥接层覆盖性能模式、充电上限、风扇曲线、功耗限制和显卡模式。
+Windows 端的灯效尚未接入；每个模式下的“使用自定义曲线”开关仅在 Linux 上可用，
+G-Helper 后端会把这类操作报为不支持，而不是假装执行成功。PPD 预设绑定同样仅限
+Linux，因为 power-profiles-daemon 在 Windows 上没有对应实现。
+
+## 构建
+
+每次 push 和 pull request 时，GitHub Actions 都会运行测试和两个平台的构建
+（`.github/workflows/ci.yml`）。
+
+`.github/workflows/release.yml` 会发布两类版本：
+
+- 每次向 `main` push 时，都会用该提交的快照替换唯一的 **rolling** 预发布版本，
+  标签为 `rolling`；
+- 推送 `v1.0.0` 之类的版本标签时，会发布稳定版，附带带版本号的
+  `linux-amd64` 和 `windows-amd64` 压缩包。
+
+两个发布通道包含相同的文件和 `SHA256SUMS`。版本标签会写入“关于”页面。
+要在本地生成压缩包，请运行 `./scripts/build-linux.sh` 或
+`./scripts/build-windows.sh`，并设置 `VERSION=1.2.3`。
+
+## 语言
+
+应用会跟随桌面语言，找不到对应语言时回退到英文。用户可以在“关于”页面另行选择，
+MyGo 会记住选择。
+
+语言目录是 `internal/i18n/catalogs` 下 ARB 风格的 JSON：`en.json` 是源文件，
+`zh-Hans.json` 是中文翻译。翻译中缺少某个键时会回退到英文；当一个目录与另一个
+目录不一致时，`TestCatalogsHaveTheSameKeys` 会失败。要添加语言，请把 `en.json`
+复制为 `<tag>.json`，翻译其中的值，然后运行 `go test ./internal/i18n`。
+
+## 许可证
+
+应用采用 **MPL-2.0 OR GPL-3.0-or-later** 双许可证（见 `LICENSE`）。
+MPL 让 Linux 版本的许可条款与 asusctl 接近；提供 GPL 选项，是为了让 Windows
+桥接层能链接采用 GPL-3.0-or-later 的 G-Helper，而无需为整个应用重新授权。
+
+- `licenses/MPL-2.0.txt` 和 `licenses/GPL-3.0.txt` 是完整的许可证文本。
+- `windows/bridge` 仅采用 GPL-3.0-or-later，因为它源自 G-Helper。
+- CrychicUI 采用 MIT 许可证；MyGo 采用 MIT 许可证。`NOTICE` 列出了上游项目。
+
+每个源文件都带有 `SPDX-License-Identifier` 行。
+
+## 目录结构
+
+```
+cmd/zephyr-center         the app
+internal/app              the window, pages, CrychicUI helpers and the curve editor
+internal/backend          the contract both machines implement
+internal/backend/asusd    Linux: asusd over D-Bus, sysfs for sensors
+internal/backend/ghelper  Windows: the JSON bridge
+internal/backend/fake     a made-up machine, for tests and screenshots
+internal/i18n             catalogs and lookup
+windows/bridge            the GPL-3.0 Windows helper, built on G-Helper
+```
+
+## MVP 暂未包含
+
+Anime Matrix、Slash 灯效、ROG Ally 和 XG Mobile、单键 Aura、托盘集成、通知、
+全局快捷键和开机自启。上游项目具备这些功能；这次重写先从用户日常会调整的设置做起。

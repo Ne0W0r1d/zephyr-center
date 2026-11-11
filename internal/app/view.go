@@ -9,6 +9,7 @@ import (
 	"github.com/ELY-Open-Source/CrychicUI/button"
 	"github.com/ELY-Open-Source/CrychicUI/feedback"
 	"github.com/ELY-Open-Source/CrychicUI/navigation"
+	"github.com/ELY-Open-Source/CrychicUI/sound"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/Ne0W0r1d/zephyr-center/internal/backend"
@@ -76,6 +77,14 @@ func (a *App) header(c *ui.Context, s backend.Snapshot) {
 				caption(c, subtitle).SingleLine()
 			}
 		})
+		on := sound.Enabled()
+		label, glyph := i18n.T(c, "app.mute"), "volume-2"
+		if !on {
+			label, glyph = i18n.T(c, "app.unmute"), "volume-x"
+		}
+		if button.IconButton(c, label, glyph).Clicked() {
+			a.setSoundMuted(on)
+		}
 		if button.IconButton(c, i18n.T(c, "app.refresh"), "refresh-cw").Clicked() {
 			go a.refresh()
 		}
@@ -163,6 +172,18 @@ func rpm(v int) string {
 // its English name.
 func profileLabel(c *ui.Context, p backend.Profile) string {
 	key := "profile." + string(p)
+	if v := i18n.T(c, key); v != key {
+		return v
+	}
+	return p.Label()
+}
+
+// ppdLabel says a power-profiles-daemon preset in the window's language.
+func ppdLabel(c *ui.Context, p backend.PPDPreset) string {
+	if p == "" {
+		return i18n.T(c, "common.unknown")
+	}
+	key := "ppd." + string(p)
 	if v := i18n.T(c, key); v != key {
 		return v
 	}

@@ -282,6 +282,12 @@ func (b *Backend) SetProfile(ctx context.Context, p backend.Profile) error {
 	return err
 }
 
+// SetPPDPreset implements backend.Backend. PPD is a Linux service, so the
+// Windows bridge leaves it alone.
+func (b *Backend) SetPPDPreset(ctx context.Context, preset backend.PPDPreset) error {
+	return errors.New("ghelper: power-profiles-daemon is not available on Windows")
+}
+
 // SetChargeLimit implements backend.Backend.
 func (b *Backend) SetChargeLimit(ctx context.Context, limit int) error {
 	_, err := b.call(ctx, request{Op: "set_charge_limit", Value: limit})

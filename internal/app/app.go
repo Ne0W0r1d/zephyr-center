@@ -6,7 +6,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +33,9 @@ type App struct {
 	gpuAt      time.Time
 	charge     *int
 	chargeAt   time.Time
+	// chargeOnce is the limit to put back after a one-time full charge,
+	// or 0 when no such charge is waiting.
+	chargeOnce int
 
 	page      string
 	fanPage   string
@@ -56,6 +58,11 @@ type App struct {
 	chargeDraft float64
 	chargeSet   bool
 
+	// ppdBindings maps each firmware profile to the PPD preset the app
+	// switches to with it. An empty preset leaves PPD alone.
+	ppdBindings  map[backend.Profile]backend.PPDPreset
+	settingsPath string
+
 	// localeChoice is the language the user picked, "" to follow the
 	// desktop. The view reads c.Locale() for what is shown.
 	localeChoice string
@@ -63,7 +70,7 @@ type App struct {
 
 // New returns the app over be.
 func New(be backend.Backend) *App {
-	return &App{
+	a := &App{
 		be:           be,
 		page:         "overview",
 		fanPage:      string(backend.ProfileBalanced),
@@ -73,8 +80,12 @@ func New(be backend.Backend) *App {
 		fanDrag:      map[string]int{},
 		fanPoint:     map[string]int{},
 		auraPower:    map[uint32]backend.AuraPower{},
+		ppdBindings:  defaultPPDBindings(),
+		settingsPath: settingsPath(),
 		localeChoice: "",
 	}
+	a.loadSettings()
+	return a
 }
 
 // Backend returns the backend the app talks to.
@@ -103,6 +114,7 @@ func (a *App) refresh() {
 	if err != nil {
 		s.Err = err.Error()
 	}
+	a.restoreChargeOnce(&s)
 	a.snap.Store(&s)
 	a.mu.Lock()
 	inv := a.invalidate
@@ -215,15 +227,70 @@ func (a *App) setProfile(p backend.Profile) {
 	a.mu.Lock()
 	a.profile, a.profileAt = &p, time.Now()
 	a.mu.Unlock()
-	a.do(p.Label(), func(ctx context.Context) error { return a.be.SetProfile(ctx, p) })
+	preset := a.ppdBindingFor(p)
+	ppdSupported := a.Snapshot().PPD.Supported
+	a.do(p.Label(), func(ctx context.Context) error {
+		if err := a.be.SetProfile(ctx, p); err != nil {
+			return err
+		}
+		if ppdSupported && preset != "" {
+			return a.be.SetPPDPreset(ctx, preset)
+		}
+		return nil
+	})
 }
 
 // setCharge applies a charge limit.
 func (a *App) setCharge(limit int) {
 	a.mu.Lock()
 	a.charge, a.chargeAt = &limit, time.Now()
+	if limit != 100 {
+		a.chargeOnce = 0
+	}
 	a.mu.Unlock()
-	a.do(fmt.Sprintf("%d%%", limit), func(ctx context.Context) error { return a.be.SetChargeLimit(ctx, limit) })
+	a.do("", func(ctx context.Context) error { return a.be.SetChargeLimit(ctx, limit) })
+}
+
+// chargeToFull lifts the charge limit to 100 once and remembers limit, so
+// that refresh puts it back when the battery is full.
+func (a *App) chargeToFull(limit int) {
+	if limit >= 100 {
+		return
+	}
+	a.mu.Lock()
+	if a.chargeOnce == 0 {
+		a.chargeOnce = limit
+	}
+	a.mu.Unlock()
+	a.setCharge(100)
+}
+
+// chargeOnceLimit returns the limit a one-time full charge will restore,
+// or 0 when none is pending.
+func (a *App) chargeOnceLimit() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.chargeOnce
+}
+
+// restoreChargeOnce puts the saved limit back once the battery is full.
+// It runs from refresh, before the snapshot reaches the view.
+func (a *App) restoreChargeOnce(s *backend.Snapshot) {
+	if !s.Battery.Present || s.Battery.Capacity < 100 {
+		return
+	}
+	a.mu.Lock()
+	prev := a.chargeOnce
+	if prev > 0 {
+		a.chargeOnce = 0
+		a.charge, a.chargeAt = nil, time.Time{}
+	}
+	a.mu.Unlock()
+	if prev == 0 {
+		return
+	}
+	s.ChargeLimit = prev
+	a.do("", func(ctx context.Context) error { return a.be.SetChargeLimit(ctx, prev) })
 }
 
 // setGPU applies a graphics mode. Switching the discrete GPU on or off is
