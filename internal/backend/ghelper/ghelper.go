@@ -87,24 +87,24 @@ func (b *Backend) start() error {
 
 // request is one line of the bridge's protocol.
 type request struct {
-	Op        string  `json:"op"`
-	Name      string  `json:"name,omitempty"`
-	Value     int     `json:"value,omitempty"`
-	Profile   string  `json:"profile,omitempty"`
-	Fan       string  `json:"fan,omitempty"`
-	Temp      []int   `json:"temp,omitempty"`
-	PWM       []int   `json:"pwm,omitempty"`
-	Enabled   bool    `json:"enabled,omitempty"`
-	Mode      uint32  `json:"mode,omitempty"`
-	Zone      uint32  `json:"zone,omitempty"`
-	Color1    []int   `json:"color1,omitempty"`
-	Color2    []int   `json:"color2,omitempty"`
-	Speed     string  `json:"speed,omitempty"`
-	Direction string  `json:"direction,omitempty"`
-	Boot      bool    `json:"boot,omitempty"`
-	Awake     bool    `json:"awake,omitempty"`
-	Sleep     bool    `json:"sleep,omitempty"`
-	Shutdown  bool    `json:"shutdown,omitempty"`
+	Op        string `json:"op"`
+	Name      string `json:"name,omitempty"`
+	Value     int    `json:"value,omitempty"`
+	Profile   string `json:"profile,omitempty"`
+	Fan       string `json:"fan,omitempty"`
+	Temp      []int  `json:"temp,omitempty"`
+	PWM       []int  `json:"pwm,omitempty"`
+	Enabled   bool   `json:"enabled,omitempty"`
+	Mode      uint32 `json:"mode,omitempty"`
+	Zone      uint32 `json:"zone,omitempty"`
+	Color1    []int  `json:"color1,omitempty"`
+	Color2    []int  `json:"color2,omitempty"`
+	Speed     string `json:"speed,omitempty"`
+	Direction string `json:"direction,omitempty"`
+	Boot      bool   `json:"boot,omitempty"`
+	Awake     bool   `json:"awake,omitempty"`
+	Sleep     bool   `json:"sleep,omitempty"`
+	Shutdown  bool   `json:"shutdown,omitempty"`
 }
 
 // response is the bridge's reply.
@@ -207,10 +207,10 @@ type wireFeature struct {
 }
 
 type wireCurve struct {
-	Fan     string  `json:"fan"`
-	Temp    []int   `json:"temp"`
-	PWM     []int   `json:"pwm"`
-	Enabled bool    `json:"enabled"`
+	Fan     string `json:"fan"`
+	Temp    []int  `json:"temp"`
+	PWM     []int  `json:"pwm"`
+	Enabled bool   `json:"enabled"`
 }
 
 // call sends one request and reads one reply.
