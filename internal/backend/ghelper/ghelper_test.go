@@ -136,6 +136,30 @@ func TestRequestEncoding(t *testing.T) {
 	}
 }
 
+// TestRestartEncoding checks the bridge receives an explicit reboot
+// request, rather than the app rebooting or shutting down on its own.
+func TestRestartEncoding(t *testing.T) {
+	logPath := t.TempDir() + "/requests.log"
+	t.Setenv("BRIDGE_LOG", logPath)
+	script := "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\" >> \"$BRIDGE_LOG\"; echo '{\"ok\":true}'; done\n"
+	b := New(writeScript(t, "record.sh", script))
+
+	if err := b.Restart(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req request
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(body))), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Op != "reboot" {
+		t.Errorf("restart request is %+v, want op=reboot", req)
+	}
+}
+
 // TestWindowsParityWrites checks that lighting and per-profile fan
 // controls reach the bridge instead of being reported as unsupported.
 func TestWindowsParityWrites(t *testing.T) {

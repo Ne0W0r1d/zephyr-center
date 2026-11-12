@@ -472,3 +472,10 @@ func (b *Backend) SetAuraPower(ctx context.Context, p backend.AuraPower) error {
 	})
 	return err
 }
+
+// Restart implements backend.Backend. The bridge performs a real Windows
+// restart, not a shutdown, so the firmware applies the MUX at POST.
+func (b *Backend) Restart(ctx context.Context) error {
+	_, err := b.call(ctx, request{Op: "reboot"})
+	return err
+}

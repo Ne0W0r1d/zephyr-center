@@ -48,6 +48,34 @@ func TestSetGPUDoesNotDeadlock(t *testing.T) {
 	}
 }
 
+// TestGPURestartActionAppearsWithAPendingSwitch checks the restart button
+// is offered only while the MUX change waits for POST.
+func TestGPURestartActionAppearsWithAPendingSwitch(t *testing.T) {
+	a := New(fake.New())
+	a.Refresh()
+	a.page = "gpu"
+	tester := ui.NewTester(a.View, 1180, 800)
+	tester.SetLocale("en")
+	tester.Frame()
+
+	if tester.HasText("Restart now") {
+		t.Fatal("the idle page offers a restart")
+	}
+	if err := tester.Click("Ultimate"); err != nil {
+		t.Fatal(err)
+	}
+	tester.Frame()
+	tester.Advance(600 * time.Millisecond)
+	tester.Frame()
+
+	if !a.Snapshot().GPU.NeedsReboot() {
+		t.Fatalf("choosing Ultimate did not queue a restart: %+v", a.Snapshot().GPU)
+	}
+	if !tester.HasText("Restart now") {
+		t.Fatalf("the pending page has no restart action: %q", tester.Texts())
+	}
+}
+
 // TestSetGPUSwitchesToIntegratedLive checks that turning the discrete GPU
 // off is a live change. Only the MUX, which Ultimate uses, needs a restart.
 func TestSetGPUSwitchesToIntegratedLive(t *testing.T) {

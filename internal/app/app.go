@@ -48,23 +48,28 @@ type App struct {
 
 	advancedOpen bool
 
-	auraMode      uint32
-	auraZone      uint32
-	auraSpeed     string
-	auraDirection string
-	auraColor1    ui.Color
-	auraColor2    ui.Color
-	auraDirty     bool
-	auraSynced    bool
-	auraPower     map[uint32]backend.AuraPower
+	auraMode       uint32
+	auraZone       uint32
+	auraSpeed      string
+	auraDirection  string
+	auraColor1     ui.Color
+	auraColor2     ui.Color
+	auraBrightness uint32
+	auraProfile    backend.Profile
+	auraDirty      bool
+	auraSynced     bool
+	auraPower      map[uint32]backend.AuraPower
 
 	chargeDraft float64
 	chargeSet   bool
 
 	// ppdBindings maps each firmware profile to the PPD preset the app
 	// switches to with it. An empty preset leaves PPD alone.
-	ppdBindings  map[backend.Profile]backend.PPDPreset
-	settingsPath string
+	ppdBindings       map[backend.Profile]backend.PPDPreset
+	powerModeBindings map[backend.Profile]int
+	profileFeatures   map[backend.Profile]map[string]int
+	profileAura       map[backend.Profile]auraPreset
+	settingsPath      string
 
 	// localeChoice is the language the user picked, "" to follow the
 	// desktop. The view reads c.Locale() for what is shown.
@@ -74,18 +79,21 @@ type App struct {
 // New returns the app over be.
 func New(be backend.Backend) *App {
 	a := &App{
-		be:           be,
-		page:         "overview",
-		fanPage:      string(backend.ProfileBalanced),
-		fanFan:       "CPU",
-		fanDraft:     map[string][8][2]float64{},
-		fanEnable:    map[string]bool{},
-		fanDrag:      map[string]int{},
-		fanPoint:     map[string]int{},
-		auraPower:    map[uint32]backend.AuraPower{},
-		ppdBindings:  defaultPPDBindings(),
-		settingsPath: settingsPath(),
-		localeChoice: "",
+		be:                be,
+		page:              "overview",
+		fanPage:           string(backend.ProfileBalanced),
+		fanFan:            "CPU",
+		fanDraft:          map[string][8][2]float64{},
+		fanEnable:         map[string]bool{},
+		fanDrag:           map[string]int{},
+		fanPoint:          map[string]int{},
+		auraPower:         map[uint32]backend.AuraPower{},
+		ppdBindings:       defaultPPDBindings(),
+		powerModeBindings: map[backend.Profile]int{},
+		profileFeatures:   map[backend.Profile]map[string]int{},
+		profileAura:       map[backend.Profile]auraPreset{},
+		settingsPath:      settingsPath(),
+		localeChoice:      "",
 	}
 	a.loadSettings()
 	return a
@@ -98,6 +106,8 @@ func (a *App) Backend() backend.Backend { return a.be }
 // window never blocks on D-Bus or nvidia-smi.
 func (a *App) Start() {
 	go func() {
+		a.refresh()
+		a.applyStartupSettings()
 		for {
 			a.refresh()
 			time.Sleep(2 * time.Second)
@@ -125,6 +135,63 @@ func (a *App) refresh() {
 	if inv != nil {
 		inv()
 	}
+}
+
+// applyStartupSettings restores the values the user explicitly saved for
+// the profile the machine booted in. It deliberately leaves PPD alone:
+// that daemon has its own desktop policy, and an untouched default
+// binding should not rewrite it on every launch.
+func (a *App) applyStartupSettings() {
+	s := a.Snapshot()
+	if s.Profile == "" {
+		return
+	}
+	features := a.featuresFor(s.Profile)
+	aura, hasAura := a.auraFor(s.Profile)
+	powerMode, powerBound := a.powerModeBindingFor(s.Profile)
+	if len(features) == 0 && !hasAura && !powerBound {
+		return
+	}
+	a.doTimeout(45*time.Second, "", func(ctx context.Context) error {
+		var firstErr error
+		if powerBound && hasFeature(s, "power_mode") &&
+			s.Features["power_mode"].Value != powerMode {
+			if err := a.be.SetFeature(ctx, "power_mode", powerMode); err != nil {
+				firstErr = err
+			}
+		}
+		for name, value := range features {
+			if !rememberedFeature(name) || (powerBound && name == "power_mode") {
+				continue
+			}
+			next, ok := profileFeatureValue(s, name, value)
+			if !ok || s.Features[name].Value == next {
+				continue
+			}
+			if err := a.be.SetFeature(ctx, name, next); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		if hasAura && s.Aura.Supported && !sameAuraScene(s.Aura, aura) {
+			if err := a.be.SetAura(ctx, aura.mode()); err != nil && firstErr == nil {
+				firstErr = err
+			}
+			if err := a.be.SetAuraBrightness(ctx, aura.Brightness); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		return firstErr
+	})
+}
+
+// sameAuraScene reports whether the hardware already shows the saved
+// scene, so startup does not write the same lighting values again.
+func sameAuraScene(s backend.AuraState, p auraPreset) bool {
+	m := s.Mode
+	return m.Mode == p.Mode && m.Zone == p.Zone &&
+		m.Color1 == p.Color1 && m.Color2 == p.Color2 &&
+		m.Speed == p.Speed && m.Direction == p.Direction &&
+		s.Brightness == p.Brightness
 }
 
 // setInvalidate records how to ask the window for a frame.
@@ -227,19 +294,60 @@ func (a *App) doTimeout(timeout time.Duration, okMsg string, fn func(context.Con
 
 // setProfile applies p now, and keeps it in the window until asusd agrees.
 func (a *App) setProfile(p backend.Profile) {
+	before := a.Snapshot()
+	if before.Profile != "" && before.Profile != p {
+		a.captureProfileFeatures(before.Profile, before)
+	}
 	a.mu.Lock()
 	a.profile, a.profileAt = &p, time.Now()
 	a.mu.Unlock()
+
+	s := a.Snapshot()
 	preset := a.ppdBindingFor(p)
-	ppdSupported := a.Snapshot().PPD.Supported
-	a.do("common.applied", func(ctx context.Context) error {
+	ppdSupported := s.PPD.Supported
+	powerMode, powerBound := a.powerModeBindingFor(p)
+	features := a.featuresFor(p)
+	aura, hasAura := a.auraFor(p)
+
+	a.doTimeout(45*time.Second, "common.applied", func(ctx context.Context) error {
 		if err := a.be.SetProfile(ctx, p); err != nil {
 			return err
 		}
+		var firstErr error
 		if ppdSupported && preset != "" {
-			return a.be.SetPPDPreset(ctx, preset)
+			if err := a.be.SetPPDPreset(ctx, preset); err != nil {
+				firstErr = err
+			}
 		}
-		return nil
+		if powerBound && hasFeature(s, "power_mode") {
+			if err := a.be.SetFeature(ctx, "power_mode", powerMode); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		for name, value := range features {
+			if !rememberedFeature(name) {
+				continue
+			}
+			if powerBound && name == "power_mode" {
+				continue
+			}
+			next, ok := profileFeatureValue(s, name, value)
+			if !ok {
+				continue
+			}
+			if err := a.be.SetFeature(ctx, name, next); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		if hasAura && s.Aura.Supported {
+			if err := a.be.SetAura(ctx, aura.mode()); err != nil && firstErr == nil {
+				firstErr = err
+			}
+			if err := a.be.SetAuraBrightness(ctx, aura.Brightness); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		return firstErr
 	})
 }
 
@@ -316,6 +424,15 @@ func (a *App) setGPU(mode backend.GPUMode) {
 	a.doTimeout(30*time.Second, msg, func(ctx context.Context) error { return a.be.SetGPUMode(ctx, mode) })
 }
 
+// restart reboots so a queued MUX change reaches POST. It is a real
+// restart, not a shutdown: Windows Fast Startup can skip the firmware
+// step that latches the new MUX value.
+func (a *App) restart() {
+	a.doTimeout(10*time.Second, "", func(ctx context.Context) error {
+		return a.be.Restart(ctx)
+	})
+}
+
 // gpuRestarts reports whether switching between two modes moves the MUX.
 // Only the path through Ultimate does: the MUX is what makes a restart
 // necessary, while the discrete GPU itself can be switched at runtime.
@@ -323,7 +440,51 @@ func gpuRestarts(from, to backend.GPUMode) bool {
 	return from == backend.GPUModeUltimate || to == backend.GPUModeUltimate
 }
 
+// rememberedFeature reports whether a firmware value belongs to a
+// performance profile. Case and lighting are global, and the GPU flags
+// have their own switch path.
+func rememberedFeature(name string) bool {
+	switch name {
+	case "panel_overdrive", "panel_od", "boot_sound", "charge_mode",
+		"dgpu_disable", "gpu_mux_mode", "power_mode":
+		return false
+	default:
+		return true
+	}
+}
+
+// profileFeatureValue adapts a remembered value to what the firmware
+// currently accepts, so a saved PL or boost value cannot be written past
+// that model's range.
+func profileFeatureValue(s backend.Snapshot, name string, value int) (int, bool) {
+	f, ok := s.Features[name]
+	if !ok || !f.Supported {
+		return 0, false
+	}
+	if len(f.Values) > 0 {
+		for _, allowed := range f.Values {
+			if allowed == value {
+				return value, true
+			}
+		}
+		return 0, false
+	}
+	if f.Min >= 0 && value < f.Min {
+		value = f.Min
+	}
+	if f.Max >= 0 && value > f.Max {
+		value = f.Max
+	}
+	if f.Step > 1 && f.Min >= 0 {
+		value = f.Min + (value-f.Min)/f.Step*f.Step
+	}
+	return value, true
+}
+
 // setFeature writes one firmware attribute.
 func (a *App) setFeature(name string, value int) {
+	if rememberedFeature(name) {
+		a.rememberFeature(a.Snapshot().Profile, name, value)
+	}
 	a.do("common.applied", func(ctx context.Context) error { return a.be.SetFeature(ctx, name, value) })
 }

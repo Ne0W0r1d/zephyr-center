@@ -20,20 +20,33 @@ Zephyr Center 是一个用 [MyGo](https://github.com/egoist/mygo) 和
 - **概览**：当前性能模式，电池电量、健康度和功耗，充电上限，CPU 和 GPU
   温度与风扇转速，以及固件开关（面板超频、开机音效）。
 - **性能**：平台模式、各模式绑定的 PPD 预设，以及 asusd 提供的功耗限制
-  （PL1、PL2、NVIDIA 动态加速和温度目标）。
+  （PL1、PL2、NVIDIA 动态加速和温度目标）。Linux 下还会直接从
+  `cpufreq`/`intel_pstate` 读取 CPU 加速开关，因此没有 asusd 也能用。
+  每个性能模式会分别记忆自己的 PL、NVIDIA 加速、温度目标等固件参数，
+  切换模式时自动恢复。
 - **风扇**：各性能模式下的 CPU 和 GPU 风扇曲线，可拖动八个控制点或用方向键
   编辑，也可启用、停用或恢复固件的默认设置。
 - **灯效**：针对 asusd 找到的 Aura 设备，可调节亮度、灯效、区域、速度、
-  方向、两种颜色和电源状态。Windows 下通过 ASUS HID 或 ACPI 控制同一组设置。
+  方向、两种颜色和电源状态。固件声明支持的灯效都会列出，每个性能模式还会
+  保存自己的灯效场景与亮度。Windows 下通过 ASUS HID 或 ACPI 控制同一组设置。
 - **显卡**：集成、混合和 Ultimate 三种模式；两个平台都只有经过 Ultimate 的切换需要重启。
+  从 Ultimate 切到集成需要两次启动：先移动 MUX，重启后再关闭独显。
 - **系统**：型号、主板、BIOS、CPU、两块 GPU、内核和操作系统，以及 asusd
-  读取的固件属性。Windows 从 WMI 填充相同字段，并补齐电池功耗、健康度、循环次数和剩余时间。
+  读取的固件属性。Windows 从 WMI 填充相同字段，并补齐电池功耗、健康度、
+  循环次数和剩余时间。Linux 还会列出检测到的华硕/罗技 HID 外设及接收器电量；
+  逐型号 DPI、按键和 RGB 编程暂未包含。
 - **关于**：版本信息、语言选择和许可证。
 - **托盘**：关闭窗口后应用继续在通知区域运行，可从托盘**打开 Zephyr 中心**
   或**退出 Zephyr 中心**。Linux 和 Windows 使用同一个图标。
 
-窗口每两秒根据一次快照重绘，读数能保持实时，同时不会阻塞 UI 线程。所有写入都交给
-后端，不直接写 sysfs，因此在 Linux 上 asusd 仍是唯一的写入方。
+窗口每两秒根据一次快照重绘，读数能保持实时，同时不会阻塞 UI 线程。asusd 运行时
+它仍是唯一的写入方；如果 asusd 缺失，或没有导出较新的 `AsusArmoury` 属性，后端会
+回退到内核的 `asus-armoury`/`asus-nb-wmi` sysfs 接口，路径与 G-Helper Linux 相同。
+
+Linux 的性能页会把每个固件模式绑定到 power-profiles-daemon 预设；Windows 上同一张
+卡片则绑定 Windows 电源模式滑块（最佳能效、平衡、最佳性能或高性能计划）。这些绑定，
+以及每模式灯效和固件参数，会和设置一起保存在 `%APPDATA%/zephyr-center` 或
+`$XDG_CONFIG_HOME/zephyr-center`。
 
 ## 运行
 
@@ -44,11 +57,15 @@ git clone https://github.com/Ne0W0r1d/zephyr-center
 cd zephyr-center
 ```
 
-Linux 端需要先运行 `asusd`：
+Linux 端优先使用 `asusd`：
 
 ```sh
 go run ./cmd/zephyr-center
 ```
+
+没有 asusd 时，平台模式、电池充电上限、显卡/MUX、面板 OD、开机音效和 CPU 加速
+仍可通过内核的 ASUS sysfs 属性读写。风扇曲线和 Aura 灯效依赖 asusd 的 D-Bus
+接口，没有 asusd 时会显示为不可用。
 
 没有 ASUS 硬件时，可以运行演示后端查看界面：
 
@@ -105,7 +122,13 @@ Windows 下固件的 Turbo 模式显示为**增强**，以免和同一页面上�
 
 显卡模式取决于 MUX：当它把屏幕直连到独显（Ultimate）时，驱动会拒绝写入 eco 端点，
 所以离开 Ultimate 只切换 MUX，并在下次重启后生效。排队的模式同样记在上面那个文件里，
-因此重启应用后仍然保留，也可以通过重新选择 Ultimate 撤销。
+并带上排队时的 Windows 启动会话。启动时 helper 会回读固件并核对计划，和 G-Helper
+的 `InitGPUMode` 一样：没有在重启后生效的模式会被丢弃，而不是永远留在“待重启”状态；
+从 Ultimate 切到集成时，MUX 移动后的那次启动会补上推迟的 eco 写入。
+
+MUX 由固件在 POST 阶段应用，而不是由驱动在运行时应用。因此 G-Helper 写完 MUX 后
+会执行真正的重启（`shutdown /r`）。Windows 的“关机”再开机可能走快速启动，不会以
+同样的方式初始化 MUX；切换显卡模式后请使用**重启**，不要关机再开机。
 
 两个平台都使用客户端窗口装饰：应用自己绘制最小化、最大化和关闭按钮，并隐藏系统
 自带的窗口按钮，因此 Windows 的标题栏按钮不会再遮住内容。
@@ -170,7 +193,7 @@ MPL 让 Linux 版本的许可条款与 asusctl 接近；提供 GPL 选项，是�
 cmd/zephyr-center         the app
 internal/app              the window, pages, CrychicUI helpers and the curve editor
 internal/backend          the contract both machines implement
-internal/backend/asusd    Linux: asusd over D-Bus, sysfs for sensors
+internal/backend/asusd    Linux: asusd over D-Bus, kernel sysfs fallback
 internal/backend/ghelper  Windows: the JSON bridge
 internal/backend/fake     a made-up machine, for tests and screenshots
 internal/i18n             catalogs and lookup
@@ -179,5 +202,7 @@ windows/bridge            the GPL-3.0 Windows helper, built on G-Helper
 
 ## MVP 暂未包含
 
-Anime Matrix、Slash 灯效、ROG Ally 和 XG Mobile、单键 Aura、通知、全局快捷键
-和开机自启。上游项目具备这些功能；这次重写先从用户日常会调整的设置做起。
+Anime Matrix、Slash 灯效、ROG Ally 和 XG Mobile、逐键 Aura 上色、G-Helper 的
+软件驱动灯效（温度热图、GPU 模式、环境光、电量、渐变和分区自检）、通知、
+全局快捷键和开机自启。asusd 暴露的固件灯效（包括 AllModeData 里的分区灯效）
+都已可用；上游项目具备其余功能，这次重写先从用户日常会调整的设置做起。

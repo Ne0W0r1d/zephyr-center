@@ -3,10 +3,14 @@
 // Package asusd implements the Linux backend over asusd's D-Bus interface.
 //
 // asusd owns the hardware: profiles, the charge limit, fan curves, Aura
-// lighting and the GPU mux all go through xyz.ljones.Asusd on the system
-// bus. This package reads its properties and calls its methods, and reads
-// the fans, temperatures and battery that asusd does not expose from
-// sysfs. It never writes sysfs itself, so asusd stays the single writer.
+// lighting and the GPU mux go through xyz.ljones.Asusd on the system bus.
+// This package reads its properties and calls its methods, and reads the
+// fans, temperatures and battery that asusd does not expose from sysfs.
+//
+// asusd stays the preferred writer. When it is missing, or does not export
+// the newer AsusArmoury attributes, the backend falls back to the kernel's
+// asus-armoury/asus-nb-wmi sysfs interface, using the same paths G-Helper
+// Linux does.
 package asusd
 
 import (
@@ -16,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -67,6 +72,24 @@ func (b *Backend) root() (dbus.BusObject, error) {
 	return conn.Object(service, rootPath), nil
 }
 
+// daemonRunning reports whether asusd owns its well-known bus name. A bus
+// connection alone proves nothing: when the daemon is missing, proxy
+// objects still exist and every property read fails individually.
+func (b *Backend) daemonRunning() bool {
+	conn, err := b.connOrErr()
+	if err != nil {
+		return false
+	}
+	var owner string
+	if err := conn.BusObject().Call(
+		"org.freedesktop.DBus.NameHasOwner", 0, service).Store(&owner); err != nil {
+		// If the bus cannot answer, keep trying D-Bus rather than hiding a
+		// working daemon behind the narrower sysfs fallback.
+		return true
+	}
+	return owner != ""
+}
+
 // get reads a property, returning the error as D-Bus reported it.
 func get(obj dbus.BusObject, iface, name string) (dbus.Variant, error) {
 	v, err := obj.GetProperty(iface + "." + name)
@@ -82,18 +105,23 @@ func (b *Backend) Snapshot(ctx context.Context) (backend.Snapshot, error) {
 	defer b.mu.Unlock()
 	b.gen++
 	snap := backend.Snapshot{
-		Backend:    "asusd",
-		Generation: b.gen,
-		Time:       time.Now(),
-		Info:       systemInfo(),
-		Battery:    battery(),
-		Sensors:    b.sensors.read(),
-		Features:   map[string]backend.Feature{},
-		Curves:     map[backend.Profile][]backend.FanCurve{},
+		Backend:     "asusd",
+		Generation:  b.gen,
+		Time:        time.Now(),
+		Info:        systemInfo(),
+		Battery:     battery(),
+		Sensors:     b.sensors.read(),
+		Peripherals: readPeripherals(),
+		Features:    map[string]backend.Feature{},
+		Curves:      map[backend.Profile][]backend.FanCurve{},
 	}
 	root, err := b.root()
 	if err != nil {
-		snap.Err = err.Error()
+		b.sysfsSnapshot(&snap)
+		return snap, nil
+	}
+	if !b.daemonRunning() {
+		b.sysfsSnapshot(&snap)
 		return snap, nil
 	}
 	if v, err := get(root, platform, "Version"); err == nil {
@@ -123,6 +151,7 @@ func (b *Backend) Snapshot(ctx context.Context) (backend.Snapshot, error) {
 	snap.PPD = b.ppdState()
 	snap.GPU = b.gpuState(root)
 	snap.Features = b.features(root)
+	b.mergeSysfs(&snap)
 	snap.Curves = b.readCurves(root, snap.ProfileChoices)
 	snap.Aura = b.auraState(root)
 	if snap.Profile == "" {
@@ -135,9 +164,16 @@ func (b *Backend) Snapshot(ctx context.Context) (backend.Snapshot, error) {
 func (b *Backend) SetProfile(ctx context.Context, p backend.Profile) error {
 	root, err := b.root()
 	if err != nil {
+		if sysfsAvailable() {
+			return setSysfsProfile(p)
+		}
 		return err
 	}
-	return root.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Set", 0, platform, "PlatformProfile", dbus.MakeVariant(p.Code())).Err
+	err = root.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Set", 0, platform, "PlatformProfile", dbus.MakeVariant(p.Code())).Err
+	if err != nil && sysfsAvailable() {
+		return setSysfsProfile(p)
+	}
+	return err
 }
 
 // ppdObject finds power-profiles-daemon under whichever D-Bus name this
@@ -227,9 +263,16 @@ func (b *Backend) SetChargeLimit(ctx context.Context, limit int) error {
 	}
 	root, err := b.root()
 	if err != nil {
+		if sysfsAvailable() {
+			return setSysfsChargeLimit(limit)
+		}
 		return err
 	}
-	return root.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Set", 0, platform, "ChargeControlEndThreshold", dbus.MakeVariant(uint8(limit))).Err
+	err = root.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Set", 0, platform, "ChargeControlEndThreshold", dbus.MakeVariant(uint8(limit))).Err
+	if err != nil && sysfsAvailable() {
+		return setSysfsChargeLimit(limit)
+	}
+	return err
 }
 
 // armouryPath maps a feature name to its object under asus_armoury.
@@ -242,10 +285,17 @@ func armouryPath(name string) string {
 func (b *Backend) SetFeature(ctx context.Context, name string, value int) error {
 	conn, err := b.connOrErr()
 	if err != nil {
+		if sysfsAvailable() {
+			return setSysfsFeature(name, value)
+		}
 		return err
 	}
 	obj := conn.Object(service, dbus.ObjectPath(armouryPath(name)))
-	return obj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Set", 0, armoury, "CurrentValue", dbus.MakeVariant(int32(value))).Err
+	err = obj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Set", 0, armoury, "CurrentValue", dbus.MakeVariant(int32(value))).Err
+	if err != nil && sysfsAvailable() {
+		return setSysfsFeature(name, value)
+	}
+	return err
 }
 
 // auraObject finds the Aura device object, which asusd names after its USB
@@ -317,6 +367,22 @@ func (b *Backend) auraState(root dbus.BusObject) backend.AuraState {
 			st.Mode = convertMode(w)
 		}
 	}
+	var all map[uint32]auraModeWire
+	if err := obj.Call(auraIface+".AllModeData", 0).Store(&all); err == nil {
+		zones := make([]uint32, 0, len(all))
+		for zone := range all {
+			zones = append(zones, zone)
+		}
+		sort.Slice(zones, func(i, j int) bool { return zones[i] < zones[j] })
+		for _, zone := range zones {
+			m := convertMode(all[zone])
+			m.Zone = zone
+			st.AllModes = append(st.AllModes, m)
+			if !containsUint32(st.Zones, zone) {
+				st.Zones = append(st.Zones, zone)
+			}
+		}
+	}
 	if v, err := get(obj, auraIface, "LedPower"); err == nil {
 		var w auraPowerWire
 		if err := dbus.Store([]any{v}, &w); err == nil {
@@ -328,6 +394,15 @@ func (b *Backend) auraState(root dbus.BusObject) backend.AuraState {
 		}
 	}
 	return st
+}
+
+func containsUint32(values []uint32, want uint32) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // SetAura implements backend.Backend.
@@ -455,19 +530,63 @@ func (b *Backend) gpuState(root dbus.BusObject) backend.GPUState {
 	mux, muxOK := b.armouryValue(root, "gpu_mux_mode")
 	dgpu, dgpuOK := b.armouryValue(root, "dgpu_disable")
 	if !muxOK && !dgpuOK {
-		return st
+		return b.sysfsGPUState()
 	}
+
+	marker := readGPUMarker()
+	if marker != nil && !markerQueuedThisBoot(marker) {
+		b.reconcileAsusdGPUMarker(context.Background(), root, marker)
+		mux, muxOK = b.armouryValue(root, "gpu_mux_mode")
+		dgpu, dgpuOK = b.armouryValue(root, "dgpu_disable")
+	}
+
 	st.Supported = true
 	st.Mode = gpuModeOf(mux, dgpu, muxOK, dgpuOK)
-	if dgpuOK {
-		st.Modes = append(st.Modes, backend.GPUModeIntegrated)
-	}
-	st.Modes = append(st.Modes, backend.GPUModeHybrid)
-	if muxOK {
-		st.Modes = append(st.Modes, backend.GPUModeUltimate)
-	}
+	st.Modes = sysfsGPUModes(muxOK, dgpuOK)
 	st.Pending, st.Reboot = b.pendingGPUMode(root, mux, dgpu, muxOK, dgpuOK)
+
+	if marker = readGPUMarker(); markerQueuedThisBoot(marker) {
+		// The kernel/asusd value can already read back as the target while
+		// the panel is still wired the old way. The marker remembers what
+		// the user is actually looking at until POST.
+		st.Mode = marker.Previous
+		st.Pending = marker.Target
+		st.Reboot = true
+	} else if marker != nil {
+		st.Pending = marker.Target
+		st.Reboot = marker.Target != st.Mode
+	}
 	return st
+}
+
+// reconcileAsusdGPUMarker finishes the second half of the two-boot path
+// out of Ultimate. asusd queued only gpu_mux_mode=1; after the reboot the
+// panel is on the iGPU and dgpu_disable can be written safely.
+func (b *Backend) reconcileAsusdGPUMarker(ctx context.Context, root dbus.BusObject, m *gpuMarker) {
+	if m == nil || markerQueuedThisBoot(m) {
+		return
+	}
+	if m.Phase == gpuPhaseMux && m.Target == backend.GPUModeIntegrated {
+		mux, muxOK := b.armouryValue(root, "gpu_mux_mode")
+		dgpu, dgpuOK := b.armouryValue(root, "dgpu_disable")
+		if muxOK && mux == 1 && dgpuOK && dgpu == 0 {
+			if dgpuDriverActive() {
+				return
+			}
+			if err := b.applyDgpu(ctx, 1); err != nil {
+				return
+			}
+			time.Sleep(gpuSettle)
+			value, ok := b.armouryValue(root, "dgpu_disable")
+			if !ok {
+				value, ok = sysfsAttrValue("dgpu_disable")
+			}
+			if !ok || value != 1 {
+				return
+			}
+		}
+	}
+	clearGPUMarker()
 }
 
 // gpuModeOf names the mode that mux and dgpu describe: mux 0 is Ultimate,
@@ -529,35 +648,98 @@ func (b *Backend) armouryQueued(root dbus.BusObject, name string) (int, bool) {
 // when the MUX stays put the queue is applied right away; a MUX change is
 // left for the next boot, and the UI tells the user to restart.
 func (b *Backend) SetGPUMode(ctx context.Context, mode backend.GPUMode) error {
-	var dgpu, mux int
-	switch mode {
-	case backend.GPUModeIntegrated:
-		dgpu, mux = 1, 1
-	case backend.GPUModeUltimate:
-		dgpu, mux = 0, 0
-	default:
-		dgpu, mux = 0, 1
-	}
 	root, err := b.root()
 	if err != nil {
-		return err
+		return setSysfsGPUMode(mode)
 	}
-	currentMux, muxOK := b.armouryValue(root, "gpu_mux_mode")
-	_, dgpuOK := b.armouryValue(root, "dgpu_disable")
-	if dgpuOK {
-		if err := b.SetFeature(ctx, "dgpu_disable", dgpu); err != nil {
-			return err
+	mux, muxOK := b.armouryValue(root, "gpu_mux_mode")
+	dgpu, dgpuOK := b.armouryValue(root, "dgpu_disable")
+	if !muxOK && !dgpuOK {
+		return setSysfsGPUMode(mode)
+	}
+	actual := gpuModeOf(mux, dgpu, muxOK, dgpuOK)
+
+	if marker := readGPUMarker(); markerQueuedThisBoot(marker) {
+		if marker.Target == mode {
+			return nil
+		}
+		// Cancel the queued plan by writing the current hardware values
+		// back. asusd applies those at shutdown, which is a no-op.
+		if dgpuOK {
+			if err := b.SetFeature(ctx, "dgpu_disable", dgpu); err != nil {
+				return err
+			}
+		}
+		if muxOK {
+			if err := b.SetFeature(ctx, "gpu_mux_mode", mux); err != nil {
+				return err
+			}
+		}
+		clearGPUMarker()
+		if actual == mode {
+			return nil
 		}
 	}
-	if muxOK {
-		if err := b.SetFeature(ctx, "gpu_mux_mode", mux); err != nil {
+
+	if actual == mode {
+		clearGPUMarker()
+		return nil
+	}
+
+	switch mode {
+	case backend.GPUModeUltimate:
+		if !muxOK {
+			return errors.New("asusd: this machine has no MUX to switch")
+		}
+		if mux == 0 {
+			clearGPUMarker()
+			return nil
+		}
+		// The MUX write is rejected while the dGPU is off, so wake it
+		// first. Both writes are queued; asusd applies them at shutdown.
+		if dgpuOK && dgpu == 1 {
+			if err := b.SetFeature(ctx, "dgpu_disable", 0); err != nil {
+				return err
+			}
+		}
+		if err := b.SetFeature(ctx, "gpu_mux_mode", 0); err != nil {
 			return err
 		}
+		clearGPUMarker()
+		return nil
+
+	case backend.GPUModeIntegrated, backend.GPUModeHybrid:
+		// Leaving Ultimate shares the same black-screen hazard as the
+		// sysfs path: never queue dgpu_disable=1 while the MUX is still 0.
+		// Queue the MUX alone, then finish the dGPU write after reboot.
+		if muxOK && mux == 0 {
+			if err := b.SetFeature(ctx, "gpu_mux_mode", 1); err != nil {
+				return err
+			}
+			return writeGPUMarker(gpuMarker{
+				BootID: currentBootID(), Target: mode,
+				Phase: gpuPhaseMux, Previous: actual,
+			})
+		}
+		if !dgpuOK {
+			return errors.New("asusd: this machine cannot switch the discrete GPU")
+		}
+		target := 0
+		if mode == backend.GPUModeIntegrated {
+			target = 1
+		}
+		if dgpu != target {
+			if target == 1 && dgpuDriverActive() {
+				return errors.New("asusd: the discrete GPU driver is still active; close its users or let it suspend before switching to Integrated")
+			}
+			if err := b.applyDgpu(ctx, target); err != nil {
+				return err
+			}
+		}
+		clearGPUMarker()
+		return nil
 	}
-	if dgpuOK && (!muxOK || currentMux == mux) {
-		return b.applyQueuedGPUValue(ctx, "dgpu_disable")
-	}
-	return nil
+	return fmt.Errorf("asusd: unknown graphics mode %q", mode)
 }
 
 // applyQueuedGPUValue applies one attribute's queued value now instead of
@@ -570,6 +752,23 @@ func (b *Backend) applyQueuedGPUValue(ctx context.Context, name string) error {
 	}
 	obj := conn.Object(service, dbus.ObjectPath(armouryPath(name)))
 	return obj.CallWithContext(ctx, armoury+".ApplyQueuedGpuValue", 0).Err
+}
+
+// applyDgpu writes dgpu_disable and makes the change live. asusd queues
+// Armoury writes until shutdown; newer builds expose ApplyQueuedGpuValue
+// for this one attribute. Older daemons do not, so fall back to the kernel
+// attribute rather than leaving a half-applied two-boot switch.
+func (b *Backend) applyDgpu(ctx context.Context, value int) error {
+	if err := b.SetFeature(ctx, "dgpu_disable", value); err != nil {
+		return err
+	}
+	if err := b.applyQueuedGPUValue(ctx, "dgpu_disable"); err != nil {
+		if sysfsAvailable() {
+			return sysfsWriteAttr("dgpu_disable", value)
+		}
+		return err
+	}
+	return nil
 }
 
 // armouryValue reads one AsusArmoury attribute's current value.

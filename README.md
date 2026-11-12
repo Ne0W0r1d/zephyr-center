@@ -28,26 +28,44 @@ The same view in the dark theme:
   (panel overdrive, boot sound).
 - **Performance** — the platform profile, the PPD presets each profile is
   bound to, and the power limits asusd exposes (PL1, PL2, NVIDIA dynamic
-  boost and temperature target).
+  boost and temperature target). On Linux the CPU boost switch is read
+  directly from `cpufreq`/`intel_pstate`, so it also works without asusd.
+  Each performance mode remembers its own PL, NVIDIA boost, temperature and
+  related firmware values and reapplies them when you switch.
 - **Fans** — every profile's CPU and GPU fan curves, edited by dragging the
   eight points or with the arrow keys, with enable/disable and restore to
   the firmware's defaults.
 - **Lighting** — brightness, effect, zone, speed, direction, two colours and
   the power states, on both Aura devices asusd finds and ASUS HID keyboards
-  under Windows.
+  under Windows. Every effect the firmware advertises is listed, and each
+  performance mode keeps its own lighting scene and brightness.
 - **Graphics** — integrated, hybrid and ultimate; only a switch through
-  ultimate needs a restart, on both platforms.
+  ultimate needs a restart, on both platforms. Leaving Ultimate for
+  Integrated is a two-boot path: the MUX moves first, then the discrete GPU
+  is switched off once the panel is back on the iGPU.
 - **System** — model, board, BIOS, CPU, both GPUs, kernel and OS, plus the
   firmware attributes asusd reads. Windows fills the same fields from WMI,
-  including the battery's power draw, health, cycles and time left.
+  including the battery's power draw, health, cycles and time left. On Linux
+  it also lists external ASUS/Logitech HID peripherals and the battery their
+  receiver exposes; per-model DPI, button and RGB programming is not included.
 - **About** — versions, the language picker, and the licences.
 - **Tray** — closing the window keeps the app running in the notification
   area, where **Open Zephyr Center** brings it back and **Quit Zephyr
   Center** exits. Linux and Windows use the same icon.
 
 The window redraws from a snapshot every two seconds, so the readings stay
-live without blocking the UI thread. Every write goes to the backend, not to
-sysfs, so asusd remains the single writer on Linux.
+live without blocking the UI thread. When asusd is running it remains the
+single writer. If it is missing or does not export the newer
+`AsusArmoury` attributes, the backend falls back to the kernel's
+`asus-armoury`/`asus-nb-wmi` sysfs interfaces, with the same paths
+G-Helper Linux uses.
+
+On Linux the performance page binds each firmware mode to a
+power-profiles-daemon preset. On Windows the same card binds it to the
+Windows power-mode slider (`Best power efficiency`, `Balanced`,
+`Best performance` or the high-performance plan). Both bindings are stored
+in `%APPDATA%/zephyr-center` or `$XDG_CONFIG_HOME/zephyr-center` next to the
+per-mode lighting and firmware values.
 
 ## Run
 
@@ -58,11 +76,16 @@ git clone https://github.com/Ne0W0r1d/zephyr-center
 cd zephyr-center
 ```
 
-Linux needs `asusd` running:
+Linux prefers `asusd` running:
 
 ```sh
 go run ./cmd/zephyr-center
 ```
+
+Without asusd, the core switches (platform profile, battery charge limit,
+GPU/MUX, panel overdrive, boot sound and CPU boost) still read and write
+the kernel's ASUS sysfs attributes. Fan curves and Aura lighting need
+asusd, because they use its D-Bus API rather than sysfs.
 
 To try the interface without ASUS hardware, run the demo backend:
 
@@ -127,8 +150,17 @@ with the mask of profiles the machine offers — so the helper keeps both in
 Graphics modes follow the MUX: while it drives the panel from the discrete
 GPU (Ultimate), the driver refuses writes to the eco endpoint, so leaving
 Ultimate only moves the MUX and takes effect on the next boot. The queued
-mode is kept in the same file, so it survives a restart of the app and can
-still be cancelled by choosing Ultimate again.
+mode is kept in the same file, together with the Windows boot session that
+queued it. At startup the helper reads the firmware back and reconciles the
+plan, like G-Helper's `InitGPUMode`: a mode that did not survive the reboot
+is dropped instead of being remembered forever, and the deferred eco write
+for Integrated is completed after the MUX has moved.
+
+A MUX change is applied by the firmware at POST, not by the driver. For
+that reason G-Helper performs a real restart (`shutdown /r`) after writing
+it. A Windows "shut down" followed by power-on can use Fast Startup, which
+does not initialize the MUX the same way; use **Restart** after changing
+the graphics mode.
 
 Both builds use client-side decorations: the app draws its own minimize,
 maximize and close controls, and the system's window buttons are hidden. This
@@ -200,7 +232,7 @@ Each source file carries an `SPDX-License-Identifier` line.
 cmd/zephyr-center         the app
 internal/app              the window, pages, CrychicUI helpers and the curve editor
 internal/backend          the contract both machines implement
-internal/backend/asusd    Linux: asusd over D-Bus, sysfs for sensors
+internal/backend/asusd    Linux: asusd over D-Bus, kernel sysfs fallback
 internal/backend/ghelper  Windows: the JSON bridge
 internal/backend/fake     a made-up machine, for tests and screenshots
 internal/i18n             catalogs and lookup
@@ -209,6 +241,9 @@ windows/bridge            the GPL-3.0 Windows helper, built on G-Helper
 
 ## Not in the MVP
 
-Anime Matrix, the Slash lighting, the ROG Ally and XG Mobile, per-key Aura,
-notifications, the global shortcut and autostart. The upstream projects have
-them; this rewrite starts with the settings people touch every day.
+Anime Matrix, the Slash lighting, the ROG Ally and XG Mobile, per-key Aura
+colour painting, the software-driven G-Helper effects (heatmap, GPU mode,
+ambient, battery, gradient and zone test), notifications, the global shortcut
+and autostart. The firmware effects asusd exposes, including any per-zone
+effect reported through AllModeData, are available. The upstream projects have
+the rest; this rewrite starts with the settings people touch every day.

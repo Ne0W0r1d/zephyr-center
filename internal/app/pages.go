@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/ELY-Open-Source/CrychicUI/button"
 	"github.com/ELY-Open-Source/CrychicUI/choice"
@@ -203,11 +204,20 @@ func (a *App) performancePage(c *ui.Context, s backend.Snapshot) {
 	})
 }
 
-// ppdCard binds each firmware profile to the PPD preset it switches to.
+// ppdCard binds each firmware profile to an external power target: PPD on
+// Linux, or the Windows power-mode slider/plan on Windows.
 func (a *App) ppdCard(c *ui.Context, s backend.Snapshot) {
-	section(c, i18n.T(c, "performance.ppd"), i18n.T(c, "performance.ppd_desc"), func() {
+	title, desc := "performance.ppd", "performance.ppd_desc"
+	if !s.PPD.Supported && hasFeature(s, "power_mode") {
+		title, desc = "performance.power_binding", "performance.power_binding_desc"
+	}
+	section(c, i18n.T(c, title), i18n.T(c, desc), func() {
 		settingsCard(c, func() {
 			if !s.PPD.Supported {
+				if f, ok := s.Features["power_mode"]; ok && f.Supported {
+					a.powerModeBindingRows(c, s, f)
+					return
+				}
 				muted(c, i18n.T(c, "performance.ppd_unavailable"))
 				return
 			}
@@ -253,6 +263,52 @@ func (a *App) ppdCard(c *ui.Context, s backend.Snapshot) {
 	})
 }
 
+// powerModeBindingRows binds Windows' power-mode slider to each firmware
+// profile. It mirrors the PPD card, including an explicit "do not change".
+func (a *App) powerModeBindingRows(c *ui.Context, s backend.Snapshot, f backend.Feature) {
+	values := f.Values
+	if len(values) == 0 {
+		values = []int{0, 1, 2, 3}
+	}
+	var rows []func()
+	for _, mode := range s.ProfileChoices {
+		mode := mode
+		rows = append(rows, func() {
+			names := []string{i18n.T(c, "performance.ppd_unbound")}
+			choices := []int{-1}
+			for _, value := range values {
+				names = append(names, featureChoiceLabel(c, "power_mode", value))
+				choices = append(choices, value)
+			}
+			selected := names[0]
+			if bound, ok := a.powerModeBindingFor(mode); ok {
+				for i, value := range choices {
+					if value == bound {
+						selected = names[i]
+					}
+				}
+			}
+			label := i18n.TF(c, "performance.power_binding_mode", map[string]any{
+				"mode": profileLabel(c, mode),
+			})
+			settingRow(c, profileLabel(c, mode), "", func() {
+				if dropdown(c, label, names, &selected) {
+					for i, name := range names {
+						if name == selected {
+							a.setPowerModeBinding(mode, choices[i])
+							break
+						}
+					}
+				}
+			})
+		})
+	}
+	grouped(c, rows)
+	caption(c, i18n.TF(c, "performance.power_binding_now", map[string]any{
+		"mode": featureChoiceLabel(c, "power_mode", f.Value),
+	}))
+}
+
 // powerCard shows the power limits asusd exposes.
 func (a *App) powerCard(c *ui.Context, s backend.Snapshot) {
 	basic := []struct{ key, title string }{
@@ -286,6 +342,7 @@ func (a *App) powerCard(c *ui.Context, s backend.Snapshot) {
 				grouped(c, advancedRows)
 			})
 		}
+		caption(c, i18n.T(c, "performance.power_memory"))
 	})
 }
 
@@ -492,9 +549,7 @@ func (a *App) auraPage(c *ui.Context, s backend.Snapshot) {
 						idx < 0 || idx >= len(values) || values[idx] == s.Aura.Brightness {
 						return
 					}
-					a.do(i18n.T(c, "aura.applied"), func(ctx context.Context) error {
-						return a.be.SetAuraBrightness(ctx, values[idx])
-					})
+					a.setAuraBrightness(values[idx])
 				})
 			})
 		})
@@ -505,6 +560,7 @@ func (a *App) auraPage(c *ui.Context, s backend.Snapshot) {
 				a.auraPowerSection(c, s)
 			},
 		})
+		caption(c, i18n.T(c, "aura.profile_scene"))
 	})
 }
 
@@ -512,7 +568,7 @@ func (a *App) auraPage(c *ui.Context, s backend.Snapshot) {
 func (a *App) auraModeSection(c *ui.Context, s backend.Snapshot) {
 	section(c, i18n.T(c, "aura.mode"), "", func() {
 		settingsCard(c, func() {
-			options := s.Aura.Modes
+			options := auraEffectOptions(s.Aura)
 			if len(options) == 0 {
 				options = []uint32{0}
 			}
@@ -560,6 +616,37 @@ func (a *App) auraModeSection(c *ui.Context, s backend.Snapshot) {
 			}
 		})
 	})
+}
+
+// auraEffectOptions lists the effects the firmware advertises plus any
+// effect asusd reports for a zone. Some models keep per-zone effects out
+// of SupportedBasicModes, so the AllModeData pass is what makes those
+// effects selectable instead of silently hiding them.
+func auraEffectOptions(aura backend.AuraState) []uint32 {
+	options := append([]uint32(nil), aura.Modes...)
+	seen := make(map[uint32]bool, len(options))
+	for _, mode := range options {
+		seen[mode] = true
+	}
+	for _, scene := range aura.AllModes {
+		if knownAuraMode(scene.Mode) && !seen[scene.Mode] {
+			seen[scene.Mode] = true
+			options = append(options, scene.Mode)
+		}
+	}
+	return options
+}
+
+// knownAuraMode matches the modes asusd's AuraModeNum enum defines. The
+// firmware can report unused numbers in AllModeData; offering those would
+// only produce a write the daemon rejects.
+func knownAuraMode(mode uint32) bool {
+	switch mode {
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12:
+		return true
+	default:
+		return false
+	}
 }
 
 // auraColorSection holds the two colour wells.
@@ -634,17 +721,41 @@ func (a *App) powerSwitch(c *ui.Context, label string, on *bool) bool {
 
 // applyAura writes the effect the user shaped.
 func (a *App) applyAura() {
-	m := backend.AuraMode{
-		Mode:      a.auraMode,
-		Zone:      a.auraZone,
-		Color1:    [3]byte{a.auraColor1.R, a.auraColor1.G, a.auraColor1.B},
-		Color2:    [3]byte{a.auraColor2.R, a.auraColor2.G, a.auraColor2.B},
-		Speed:     a.auraSpeed,
-		Direction: a.auraDirection,
-	}
+	profile := a.Snapshot().Profile
+	preset := a.currentAuraPreset()
 	a.auraDirty = false
+	a.auraSynced = true
+	a.rememberAura(profile, preset)
 	a.do("aura.applied", func(ctx context.Context) error {
-		return a.be.SetAura(ctx, m)
+		if err := a.be.SetAura(ctx, preset.mode()); err != nil {
+			return err
+		}
+		return a.be.SetAuraBrightness(ctx, preset.Brightness)
+	})
+}
+
+// currentAuraPreset packages the draft as the scene saved for the profile.
+func (a *App) currentAuraPreset() auraPreset {
+	return auraPreset{
+		Mode:       a.auraMode,
+		Zone:       a.auraZone,
+		Color1:     [3]byte{a.auraColor1.R, a.auraColor1.G, a.auraColor1.B},
+		Color2:     [3]byte{a.auraColor2.R, a.auraColor2.G, a.auraColor2.B},
+		Speed:      a.auraSpeed,
+		Direction:  a.auraDirection,
+		Brightness: a.auraBrightness,
+	}
+}
+
+// setAuraBrightness applies a brightness and keeps it in the profile's
+// scene, so switching modes restores the look the user chose.
+func (a *App) setAuraBrightness(value uint32) {
+	profile := a.Snapshot().Profile
+	a.auraBrightness = value
+	preset := a.currentAuraPreset()
+	a.rememberAura(profile, preset)
+	a.do("aura.applied", func(ctx context.Context) error {
+		return a.be.SetAuraBrightness(ctx, value)
 	})
 }
 
@@ -675,7 +786,11 @@ func (a *App) gpuPage(c *ui.Context, s backend.Snapshot) {
 			settingRow(c, i18n.T(c, "gpu.in_use"), gpuLabel(c, s.GPU.Mode), nil)
 			if s.GPU.NeedsReboot() {
 				divider(c)
-				settingRow(c, i18n.T(c, "gpu.after_restart"), gpuLabel(c, s.GPU.Pending), nil)
+				settingRow(c, i18n.T(c, "gpu.after_restart"), gpuLabel(c, s.GPU.Pending), func() {
+					if button.Solid(c, i18n.T(c, "gpu.restart_now")).Clicked() {
+						a.restart()
+					}
+				})
 			}
 		})
 		caption(c, i18n.T(c, "gpu.reboot"))
@@ -705,7 +820,51 @@ func (a *App) systemPage(c *ui.Context, s backend.Snapshot) {
 				grouped(c, rows)
 			})
 		}
+		if len(s.Peripherals) > 0 {
+			section(c, i18n.T(c, "system.peripherals"), i18n.T(c, "system.peripherals_desc"), func() {
+				rows := make([]func(), 0, len(s.Peripherals))
+				for _, device := range s.Peripherals {
+					device := device
+					rows = append(rows, func() {
+						settingRow(c, device.Name, peripheralDescription(c, device), func() {
+							if device.Battery >= 0 {
+								badge(c, fmt.Sprintf("%d%%", device.Battery), badgeSuccess)
+							}
+						})
+					})
+				}
+				grouped(c, rows)
+			})
+		}
 	})
+}
+
+// peripheralDescription names a device's kind, connection and battery
+// state without repeating the product name already on the left.
+func peripheralDescription(c *ui.Context, p backend.Peripheral) string {
+	parts := []string{peripheralKindLabel(c, p.Kind)}
+	if p.Vendor != "" {
+		parts = append(parts, p.Vendor)
+	}
+	if p.Connection != "" {
+		parts = append(parts, i18n.T(c, "system.connection."+p.Connection))
+	}
+	if p.Status != "" {
+		parts = append(parts, batteryStatus(c, backend.Battery{Status: p.Status}))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// peripheralKindLabel translates the small device vocabulary.
+func peripheralKindLabel(c *ui.Context, kind string) string {
+	if kind == "" {
+		return i18n.T(c, "system.peripheral.hid")
+	}
+	key := "system.peripheral." + kind
+	if v := i18n.T(c, key); v != key {
+		return v
+	}
+	return kind
 }
 
 // featureRows lists the firmware attributes as the firmware reports them,
@@ -881,20 +1040,49 @@ func (a *App) syncAura(s backend.Snapshot) {
 	if !s.Aura.Supported {
 		return
 	}
+	if a.auraProfile != s.Profile {
+		a.auraProfile = s.Profile
+		if preset, ok := a.auraFor(s.Profile); ok {
+			a.loadAuraPreset(preset)
+			a.auraDirty = false
+			a.auraSynced = true
+		} else if !a.auraDirty {
+			a.loadAuraSnapshot(s)
+		}
+	}
 	if !a.auraSynced && !a.auraDirty {
-		a.auraSynced = true
-		a.auraMode = s.Aura.Mode.Mode
-		a.auraZone = s.Aura.Mode.Zone
-		a.auraSpeed = s.Aura.Mode.Speed
-		a.auraDirection = s.Aura.Mode.Direction
-		a.auraColor1 = ui.RGB(s.Aura.Mode.Color1[0], s.Aura.Mode.Color1[1], s.Aura.Mode.Color1[2])
-		a.auraColor2 = ui.RGB(s.Aura.Mode.Color2[0], s.Aura.Mode.Color2[1], s.Aura.Mode.Color2[2])
+		a.loadAuraSnapshot(s)
 	}
 	if len(a.auraPower) == 0 {
 		for _, p := range s.Aura.Power {
 			a.auraPower[p.Zone] = p
 		}
 	}
+}
+
+// loadAuraSnapshot copies the hardware's current lighting into the draft.
+func (a *App) loadAuraSnapshot(s backend.Snapshot) {
+	a.auraSynced = true
+	a.auraMode = s.Aura.Mode.Mode
+	a.auraZone = s.Aura.Mode.Zone
+	a.auraSpeed = s.Aura.Mode.Speed
+	a.auraDirection = s.Aura.Mode.Direction
+	a.auraColor1 = ui.RGB(s.Aura.Mode.Color1[0], s.Aura.Mode.Color1[1], s.Aura.Mode.Color1[2])
+	a.auraColor2 = ui.RGB(s.Aura.Mode.Color2[0], s.Aura.Mode.Color2[1], s.Aura.Mode.Color2[2])
+	a.auraBrightness = s.Aura.Brightness
+}
+
+// loadAuraPreset restores a saved scene into the draft.
+func (a *App) loadAuraPreset(preset auraPreset) {
+	a.auraMode = preset.Mode
+	a.auraZone = preset.Zone
+	a.auraSpeed = preset.Speed
+	a.auraDirection = preset.Direction
+	a.auraColor1 = ui.RGB(preset.Color1[0], preset.Color1[1], preset.Color1[2])
+	a.auraColor2 = ui.RGB(preset.Color2[0], preset.Color2[1], preset.Color2[2])
+	a.auraBrightness = preset.Brightness
+	// A saved scene that predates brightness persistence has 0, which is
+	// also a real "off" value. Keep it; the hardware write is idempotent.
 }
 
 // fanLabel names a fan.

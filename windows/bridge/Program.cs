@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+using System.Diagnostics;
 using System.Management;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -26,14 +27,6 @@ static class Program
     static SystemDetails systemInfo = null!;
     static string model = "";
 
-    /// <summary>pendingGpu is the graphics mode waiting for a restart, kept
-    /// with the profile so it survives a restart of the bridge.</summary>
-    static string pendingGpu
-    {
-        get => profiles.PendingGpu;
-        set => profiles.PendingGpu = value;
-    }
-
     static int Main()
     {
         model = ReadModel();
@@ -45,6 +38,7 @@ static class Program
         systemInfo = ReadSystemInfo();
         fans.Load();
         profiles.Restore();
+        ReconcileGpu();
         fans.ApplyEnabled(PerformanceProfiles.Name(profiles.Current));
         using var input = new StreamReader(Console.OpenStandardInput());
         using var output = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true };
@@ -119,6 +113,8 @@ static class Program
                 return ResetCurves(r);
             case "set_gpu_mode":
                 return SetGpuMode(r.Value);
+            case "reboot":
+                return Reboot();
             case "set_aura":
                 return ApplyAura(r);
             case "set_aura_brightness":
@@ -272,28 +268,50 @@ static class Program
         var current = ReadGpuActual();
         if (!current.Supported)
             return new Response { Ok = false, Error = "this machine exposes no graphics switch" };
-        // A MUX change is only applied at boot, so the mode the machine will
-        // wake in counts as the one already chosen.
-        string chosen = pendingGpu != "" ? pendingGpu : current.Mode;
-        if (chosen == target)
+
+        // A plan only counts while the bridge is in the same Windows boot
+        // session. After a reboot the hardware is the authority; keeping a
+        // stale plan would make every later click return "already set".
+        bool sameSession = profiles.HasPendingGpu
+            && profiles.PendingGpuBoot == PerformanceProfiles.BootId();
+        string planned = sameSession ? profiles.PendingGpu : "";
+
+        // Changing course cancels the queued MUX/eco writes by putting the
+        // current hardware values back. This is what makes "click Ultimate
+        // again" cancel a queued switch instead of silently doing nothing.
+        if (sameSession && planned != target)
         {
+            if (current.Mux >= 0 && acpi.DeviceSet(acpi.GPUMux, current.Mux) != 1)
+                return new Response { Ok = false, Error = "the firmware would not cancel the graphics switch" };
+            if (current.Eco >= 0 && acpi.DeviceSet(acpi.GPUEco, current.Eco) != 1)
+                return new Response { Ok = false, Error = "the firmware would not cancel the graphics switch" };
+            profiles.ClearGpu();
+            sameSession = false;
+            planned = "";
+        }
+
+        if (planned == target)
+        {
+            // The requested mode is already queued for this boot. Keeping
+            // the plan is what makes the restart notice survive a snapshot.
+            return new Response { Ok = true };
+        }
+        if (!sameSession && current.Mode == target)
+        {
+            profiles.ClearGpu();
             return new Response { Ok = true };
         }
 
         // The MUX decides which GPU drives the panel, and the firmware only
         // moves it at boot. While it points at the discrete GPU the driver
         // refuses every write to the eco endpoint, so leaving Ultimate is a
-        // MUX write alone: the eco flag follows on the next boot.
+        // MUX write alone. The deferred eco write is completed by ReconcileGpu
+        // after the next boot, as G-Helper's multi-boot path does.
         if (current.Mux == 0)
         {
-            if (target == "ultimate")
-            {
-                pendingGpu = "";
-                return new Response { Ok = true };
-            }
             if (acpi.DeviceSet(acpi.GPUMux, 1) != 1)
                 return new Response { Ok = false, Error = "the firmware refused the graphics switch" };
-            pendingGpu = target;
+            profiles.QueueGpu(target, "mux");
             return new Response { Ok = true };
         }
 
@@ -304,19 +322,16 @@ static class Program
         {
             if (!acpi.IsSupported(acpi.GPUMux))
                 return new Response { Ok = false, Error = "this machine has no MUX to switch" };
-            if (pendingGpu == "")
-            {
-                // The discrete GPU has to be awake before the panel can be
-                // wired to it, so eco is cleared first and checked.
-                if (current.Eco == 1 && acpi.DeviceSet(acpi.GPUEco, 0) != 1)
-                    return new Response { Ok = false, Error = "the firmware would not wake the discrete GPU" };
-                Thread.Sleep(500);
-                if (acpi.IsSupported(acpi.GPUEco) && acpi.DeviceGet(acpi.GPUEco) == 1)
-                    return new Response { Ok = false, Error = "the discrete GPU is still off" };
-            }
+            // The discrete GPU has to be awake before the panel can be
+            // wired to it, so eco is cleared first and checked.
+            if (current.Eco == 1 && acpi.DeviceSet(acpi.GPUEco, 0) != 1)
+                return new Response { Ok = false, Error = "the firmware would not wake the discrete GPU" };
+            Thread.Sleep(500);
+            if (acpi.IsSupported(acpi.GPUEco) && acpi.DeviceGet(acpi.GPUEco) == 1)
+                return new Response { Ok = false, Error = "the discrete GPU is still off" };
             if (acpi.DeviceSet(acpi.GPUMux, 0) != 1)
                 return new Response { Ok = false, Error = "the firmware refused the graphics switch" };
-            pendingGpu = target;
+            profiles.QueueGpu("ultimate", "complete");
             return new Response { Ok = true };
         }
 
@@ -325,8 +340,78 @@ static class Program
         int eco = target == "integrated" ? 1 : 0;
         if (current.Eco != eco && acpi.DeviceSet(acpi.GPUEco, eco) != 1)
             return new Response { Ok = false, Error = "the firmware refused the graphics switch" };
-        pendingGpu = "";
+        profiles.ClearGpu();
         return new Response { Ok = true };
+    }
+
+    /// <summary>ReconcileGpu completes a MUX switch that was queued in an
+    /// earlier Windows boot, or drops a plan the firmware did not honour.
+    /// G-Helper does the same: the firmware is read back at startup instead
+    /// of remembered forever.</summary>
+    static void ReconcileGpu()
+    {
+        if (!profiles.HasPendingGpu) return;
+        if (profiles.PendingGpuBoot == PerformanceProfiles.BootId()) return;
+
+        var gpu = ReadGpuActual();
+        if (!gpu.Supported)
+        {
+            profiles.ClearGpu();
+            return;
+        }
+
+        if (profiles.PendingGpuPhase == "mux")
+        {
+            if (gpu.Mux == 1)
+            {
+                // Ultimate -> Integrated is a two-boot path: the MUX moves
+                // first, then the discrete GPU can be switched off. Complete
+                // that second half now that the panel is back on the iGPU.
+                if (profiles.PendingGpu == "integrated" && gpu.Eco == 0)
+                {
+                    if (acpi.DeviceSet(acpi.GPUEco, 1) != 1)
+                    {
+                        profiles.ClearGpu();
+                        return;
+                    }
+                    Thread.Sleep(500);
+                    if (acpi.DeviceGet(acpi.GPUEco) != 1)
+                    {
+                        profiles.ClearGpu();
+                        return;
+                    }
+                }
+                profiles.ClearGpu();
+                return;
+            }
+            // The MUX did not move. Do not keep a plan that masks reality.
+            profiles.ClearGpu();
+            return;
+        }
+
+        // phase "complete": every write was made before the reboot, so the
+        // readback now says whether it stuck. Either way the plan is done.
+        profiles.ClearGpu();
+    }
+
+    /// <summary>Reboot performs a real Windows restart. G-Helper uses the
+    /// same command after a MUX write; a shutdown can take the Fast Startup
+    /// path, which does not reinitialize the MUX at POST.</summary>
+    static Response Reboot()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("shutdown", "/r /t 5")
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+            });
+            return new Response { Ok = true };
+        }
+        catch (Exception e)
+        {
+            return new Response { Ok = false, Error = e.Message };
+        }
     }
 
     static Response Snapshot()
@@ -457,10 +542,11 @@ static class Program
 
     static Feature Feature(AsusACPI acpi, uint endpoint)
     {
+        if (!acpi.IsSupported(endpoint)) return new Feature();
         int value = acpi.DeviceGet(endpoint);
         return new Feature
         {
-            Supported = value >= 0,
+            Supported = true,
             Value = value,
             Values = [0, 1],
         };
@@ -484,15 +570,35 @@ static class Program
     {
         var gpu = ReadGpuActual();
         if (!gpu.Supported) return new GpuState();
-        // The MUX has moved, so the queued switch has happened.
-        if (pendingGpu != "" && gpu.Mode == pendingGpu) pendingGpu = "";
+        string pending = "";
+        if (profiles.HasPendingGpu)
+        {
+            if (profiles.PendingGpuBoot == PerformanceProfiles.BootId())
+            {
+                pending = profiles.PendingGpu;
+            }
+            else
+            {
+                // Main reconciles a plan from an earlier boot before the
+                // first snapshot. If one survives here, it is stale; never
+                // let it hide the mode the firmware is actually in.
+                profiles.ClearGpu();
+            }
+        }
+        // A MUX move takes effect at POST, so the queued mode is not the
+        // current display mode until the restart actually happens.
+        if (pending != "" && gpu.Mode == pending)
+        {
+            profiles.ClearGpu();
+            pending = "";
+        }
         return new GpuState
         {
             Supported = true,
             Mode = gpu.Mode,
             Modes = gpu.Modes,
-            Pending = pendingGpu,
-            Reboot = pendingGpu != "",
+            Pending = pending,
+            Reboot = pending != "",
         };
     }
 

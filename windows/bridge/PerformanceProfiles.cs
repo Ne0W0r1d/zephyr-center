@@ -6,6 +6,7 @@
 // firmware. Trimmed to the three profiles Zephyr Center offers.
 
 using System.Text.Json;
+using System.Management;
 
 namespace ZephyrBridge;
 
@@ -33,6 +34,8 @@ sealed class PerformanceProfiles
     int current;
     int chargeLimit;
     string pendingGpu;
+    string pendingGpuBoot;
+    string pendingGpuPhase;
 
     public PerformanceProfiles(AsusACPI acpi, string statePath)
     {
@@ -42,6 +45,8 @@ sealed class PerformanceProfiles
         current = saved?.Profile ?? AsusACPI.PerformanceBalanced;
         chargeLimit = saved?.ChargeLimit ?? 100;
         pendingGpu = saved?.PendingGpu ?? "";
+        pendingGpuBoot = saved?.PendingGpuBoot ?? "";
+        pendingGpuPhase = NormalizePhase(saved?.PendingGpuPhase);
     }
 
     /// <summary>Current is the profile in use, as a firmware code.</summary>
@@ -61,15 +66,76 @@ sealed class PerformanceProfiles
     /// <summary>PendingGpu is the graphics mode waiting for a restart, or ""
     /// when nothing is queued. The MUX only moves at boot, so the queue has
     /// to outlive the bridge process.</summary>
-    public string PendingGpu
+    public string PendingGpu => pendingGpu;
+
+    /// <summary>PendingGpuPhase is "mux" when only the MUX moved and the
+    /// discrete GPU still has to follow on the next boot, or "complete" when
+    /// every write was made and only the POST is missing.</summary>
+    public string PendingGpuPhase => pendingGpuPhase;
+
+    /// <summary>PendingGpuBoot is the Windows boot session that queued the
+    /// MUX write. A plan from an older session has to be reconciled with the
+    /// hardware at startup; otherwise a write that the firmware ignored would
+    /// stay "pending" forever and every later click would become a no-op.</summary>
+    public string PendingGpuBoot => pendingGpuBoot;
+
+    public bool HasPendingGpu => pendingGpu != "";
+
+    /// <summary>QueueGpu records a graphics mode the firmware will apply on
+    /// the next boot.</summary>
+    public void QueueGpu(string mode, string phase)
     {
-        get => pendingGpu;
-        set
+        pendingGpu = mode;
+        pendingGpuBoot = BootId();
+        pendingGpuPhase = NormalizePhase(phase);
+        Save();
+    }
+
+    /// <summary>ClearGpu drops the queued graphics mode.</summary>
+    public void ClearGpu()
+    {
+        if (pendingGpu == "" && pendingGpuBoot == "" && pendingGpuPhase == "") return;
+        pendingGpu = "";
+        pendingGpuBoot = "";
+        pendingGpuPhase = "";
+        Save();
+    }
+
+    static string NormalizePhase(string? phase) => phase switch
+    {
+        "mux" => "mux",
+        "complete" => "complete",
+        _ => "",
+    };
+
+    /// <summary>BootId names the current Windows boot session. WMI reports
+    /// the last boot time as a stable value that survives a bridge restart
+    /// but changes after a reboot, which is what a queued MUX write needs.</summary>
+    static string? bootId;
+
+    public static string BootId()
+    {
+        if (bootId != null) return bootId;
+        try
         {
-            if (pendingGpu == value) return;
-            pendingGpu = value;
-            Save();
+            using var searcher = new ManagementObjectSearcher(
+                "SELECT LastBootUpTime FROM Win32_OperatingSystem");
+            foreach (var obj in searcher.Get())
+            {
+                using (obj)
+                {
+                    bootId = obj["LastBootUpTime"]?.ToString() ?? "";
+                    return bootId;
+                }
+            }
         }
+        catch
+        {
+            // WMI is unavailable; an empty id makes a plan look stale, which
+            // is the safe direction: it gets reconciled instead of trusted.
+        }
+        bootId = "";
+        return bootId;
     }
 
     /// <summary>Name is the profile the app knows a firmware code by.</summary>
@@ -139,6 +205,11 @@ sealed class PerformanceProfiles
                 "ultimate" => "ultimate",
                 _ => "",
             };
+            if (saved.PendingGpu == "")
+            {
+                saved.PendingGpuBoot = "";
+                saved.PendingGpuPhase = "";
+            }
             return saved;
         }
         catch
@@ -155,7 +226,14 @@ sealed class PerformanceProfiles
             string? dir = Path.GetDirectoryName(statePath);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             File.WriteAllText(statePath, JsonSerializer.Serialize(
-                new State { Profile = current, ChargeLimit = chargeLimit, PendingGpu = pendingGpu }));
+                new State
+                {
+                    Profile = current,
+                    ChargeLimit = chargeLimit,
+                    PendingGpu = pendingGpu,
+                    PendingGpuBoot = pendingGpuBoot,
+                    PendingGpuPhase = pendingGpuPhase,
+                }));
         }
         catch
         {
@@ -168,5 +246,7 @@ sealed class PerformanceProfiles
         public int Profile { get; set; }
         public int ChargeLimit { get; set; } = 100;
         public string PendingGpu { get; set; } = "";
+        public string PendingGpuBoot { get; set; } = "";
+        public string PendingGpuPhase { get; set; } = "";
     }
 }

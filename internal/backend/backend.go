@@ -156,6 +156,7 @@ type AuraPower struct {
 type AuraState struct {
 	Supported        bool
 	Modes            []uint32
+	AllModes         []AuraMode
 	Brightness       uint32
 	Brightnesses     []uint32
 	Mode             AuraMode
@@ -165,6 +166,19 @@ type AuraState struct {
 	DeviceType       uint32
 	Path             string
 	BrightnessLabels []string
+}
+
+// Peripheral is one external device the machine reports, such as a mouse
+// or headset. Battery is -1 when the device does not expose one.
+type Peripheral struct {
+	Name       string
+	Kind       string
+	Vendor     string
+	Product    string
+	Path       string
+	Connection string
+	Battery    int
+	Status     string
 }
 
 // FanCurve is one fan's eight-point curve, as asusd stores it. PWM is 0-255
@@ -267,6 +281,7 @@ type Snapshot struct {
 	Features        map[string]Feature
 	Curves          map[Profile][]FanCurve
 	Aura            AuraState
+	Peripherals     []Peripheral
 	Err             string
 }
 
@@ -306,6 +321,8 @@ type Backend interface {
 	SetFanCurvesEnabled(ctx context.Context, profile Profile, enabled bool) error
 	ResetFanCurves(ctx context.Context, profile Profile) error
 	SetGPUMode(ctx context.Context, mode GPUMode) error
+	// Restart reboots the machine, so a queued MUX change reaches POST.
+	Restart(ctx context.Context) error
 }
 
 func clamp(v, lo, hi float64) float64 {

@@ -187,7 +187,12 @@ public sealed class AsusACPI
     {
         if (!support.TryGetValue(id, out bool ok))
         {
-            ok = DeviceGet(id) >= 0;
+            // G-Helper treats the presence bit as the support flag: an
+            // unimplemented DSTS reply is zero, while a present endpoint
+            // sets 0x00010000 even when its value is zero (the MUX and eco
+            // flags both do this).
+            int raw = DeviceGetRaw(id);
+            ok = raw >= 0 && (raw & PresenceBit) != 0;
             support[id] = ok;
         }
         return ok;

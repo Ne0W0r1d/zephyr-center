@@ -42,6 +42,10 @@ func New() *Backend {
 			Present: true, Capacity: 62, Status: "Discharging", PowerW: 18.4,
 			Health: 74.9, Cycles: 132, TimeLeft: "2h 12m",
 		},
+		Peripherals: []backend.Peripheral{
+			{Name: "ROG Gladius III Wireless AimPoint", Kind: "mouse", Vendor: "ASUS", Product: "1A72", Connection: "usb", Battery: 84, Status: "Discharging"},
+			{Name: "ROG Falchion Ace", Kind: "keyboard", Vendor: "ASUS", Product: "1A32", Connection: "usb", Battery: -1},
+		},
 		Sensors: backend.Sensors{
 			CPUTemp: 61, GPUTemp: 47, CPURPM: 3400, GPURPM: 3100, CPUUsage: 14,
 		},
@@ -247,3 +251,6 @@ func (b *Backend) SetGPUMode(ctx context.Context, m backend.GPUMode) error {
 	b.snap.GPU.Mode = m
 	return nil
 }
+
+// Restart implements backend.Backend. The demo never reboots anything.
+func (b *Backend) Restart(ctx context.Context) error { return nil }
