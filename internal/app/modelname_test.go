@@ -17,11 +17,11 @@ func TestModelNameIsChinese(t *testing.T) {
 	cases := []struct {
 		product, want string
 	}{
-		{"ROG Zephyrus M16 GU603ZM", "幻 16 2022"},
-		{"ROG Zephyrus M16 GU603ZW", "幻 16 2022"},
-		{"ROG Zephyrus G14 GA401IV", "幻 14 2020"},
-		{"ROG Zephyrus G16 GU605MV", "幻 16 Air 2024"},
-		{"ROG Zephyrus M16 GU604VI", "幻 16 2023 星空/经典版"},
+		{"ROG Zephyrus M16 GU603ZM", "ROG 幻 16 2022"},
+		{"ROG Zephyrus M16 GU603ZW", "ROG 幻 16 2022"},
+		{"ROG Zephyrus G14 GA401IV", "ROG 幻 14 2020"},
+		{"ROG Zephyrus G16 GU605MV", "ROG 幻 16 Air 2024"},
+		{"ROG Zephyrus M16 GU604VI", "ROG 幻 16 2023 星空版/经典版"},
 		{"ROG Zephyrus M16", "ROG Zephyrus M16"},
 	}
 	for _, c := range cases {
