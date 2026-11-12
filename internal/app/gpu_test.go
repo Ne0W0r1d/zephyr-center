@@ -73,6 +73,36 @@ func TestSetGPUSwitchesToIntegratedLive(t *testing.T) {
 // TestGPURestartsOnlyAroundUltimate pins when a graphics change needs a
 // restart: entering or leaving the MUX path, never between Integrated and
 // Hybrid.
+func TestSetGPULeavesUltimateForARestart(t *testing.T) {
+	be := fake.New()
+	a := New(be)
+	a.Refresh()
+	if err := be.SetGPUMode(context.Background(), backend.GPUModeUltimate); err != nil {
+		t.Fatal(err)
+	}
+	a.Refresh()
+	a.page = "gpu"
+	tester := ui.NewTester(a.View, 1180, 800)
+	tester.SetLocale("en")
+	tester.Frame()
+	tester.Advance(600 * time.Millisecond)
+	tester.Frame()
+
+	if err := tester.Click("Integrated"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The MUX still points at the discrete GPU, so the switch cannot be
+	// live: the page keeps Ultimate in use and queues Integrated.
+	s := a.Snapshot()
+	if s.GPU.Mode != backend.GPUModeUltimate {
+		t.Errorf("mode is %q, want Ultimate until the restart", s.GPU.Mode)
+	}
+	if s.GPU.Pending != backend.GPUModeIntegrated || !s.GPU.NeedsReboot() {
+		t.Errorf("the state is %+v, want Integrated queued for a restart", s.GPU)
+	}
+}
+
 func TestGPURestartsOnlyAroundUltimate(t *testing.T) {
 	cases := []struct {
 		from, to backend.GPUMode

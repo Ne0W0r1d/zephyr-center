@@ -68,6 +68,10 @@ func New() *Backend {
 			"ppt_pl2_sppt":     {Supported: true, Value: 135, Queued: -1, Min: 25, Max: 135, Step: 1},
 			"nv_dynamic_boost": {Supported: true, Value: 15, Queued: -1, Min: 5, Max: 20, Step: 1},
 			"nv_temp_target":   {Supported: true, Value: 87, Queued: -1, Min: 75, Max: 87, Step: 1},
+			"ppt_crossload":    {Supported: true, Value: 40, Queued: -1, Min: 0, Max: 40, Step: 1},
+			"ppt_cpu_temp":     {Supported: true, Value: 95, Queued: -1, Min: 75, Max: 97, Step: 1},
+			"cpu_boost":        {Supported: true, Value: 2, Queued: -1, Values: []int{0, 1, 2, 3, 4}},
+			"power_mode":       {Supported: true, Value: 1, Queued: -1, Values: []int{0, 1, 2, 3}},
 		},
 		Aura: backend.AuraState{
 			Supported:    true,

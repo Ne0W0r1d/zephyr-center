@@ -4,6 +4,7 @@ package app
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/ELY-Open-Source/CrychicUI/button"
@@ -173,9 +174,27 @@ func rpm(v int) string {
 // profileLabel says a profile in the window's language, falling back to
 // its English name.
 func profileLabel(c *ui.Context, p backend.Profile) string {
-	key := "profile." + string(p)
+	key := profileKey(p)
 	if v := i18n.T(c, key); v != key {
 		return v
+	}
+	return profileFallback(p)
+}
+
+// profileKey is the catalog key a profile is named by. Windows calls the
+// firmware's turbo profile "Enhanced", as Armoury Crate does, so the name
+// does not read as the Windows power-mode slider beside it.
+func profileKey(p backend.Profile) string {
+	if runtime.GOOS == "windows" && p == backend.ProfilePerformance {
+		return "profile.performance_windows"
+	}
+	return "profile." + string(p)
+}
+
+// profileFallback names a profile with no translation for it.
+func profileFallback(p backend.Profile) string {
+	if runtime.GOOS == "windows" && p == backend.ProfilePerformance {
+		return "Enhanced"
 	}
 	return p.Label()
 }

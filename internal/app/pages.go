@@ -255,52 +255,112 @@ func (a *App) ppdCard(c *ui.Context, s backend.Snapshot) {
 
 // powerCard shows the power limits asusd exposes.
 func (a *App) powerCard(c *ui.Context, s backend.Snapshot) {
-	rows := []struct{ key, title string }{
+	basic := []struct{ key, title string }{
 		{"ppt_pl1_spl", "performance.ppt_pl1"},
 		{"ppt_pl2_sppt", "performance.ppt_pl2"},
+		{"ppt_cpu", "performance.ppt_cpu"},
+		{"ppt_fppt", "performance.ppt_fppt"},
 		{"nv_dynamic_boost", "performance.nv_boost"},
 		{"nv_temp_target", "performance.nv_temp"},
 	}
-	var available []struct{ key, title string }
-	for _, r := range rows {
-		if hasFeature(s, r.key) {
-			available = append(available, r)
-		}
+	advanced := []struct{ key, title string }{
+		{"ppt_crossload", "performance.ppt_crossload"},
+		{"ppt_gpu2cpu", "performance.ppt_gpu2cpu"},
+		{"ppt_cpu_temp", "performance.ppt_cpu_temp"},
+		{"gpu_power", "performance.gpu_power"},
+		{"cpu_boost", "performance.cpu_boost"},
+		{"power_mode", "performance.power_mode"},
 	}
-	if len(available) == 0 {
+	basicRows := a.powerRows(c, s, basic)
+	advancedRows := a.powerRows(c, s, advanced)
+	if len(basicRows) == 0 && len(advancedRows) == 0 {
 		return
 	}
 	section(c, i18n.T(c, "performance.power"), i18n.T(c, "performance.power_desc"), func() {
-		rows := make([]func(), 0, len(available))
-		for _, r := range available {
-			r := r
-			rows = append(rows, func() {
-				f := s.Features[r.key]
-				lo, hi := float64(f.Min), float64(f.Max)
-				step := float64(f.Step)
-				if step <= 0 {
-					step = 1
-				}
-				if lo < 0 {
-					lo = 0
-				}
-				if hi <= lo {
-					hi = lo + 100
-				}
-				v := float64(f.Value)
-				settingRow(c, i18n.T(c, r.title), "", func() {
-					if choice.NumberStepper(c, i18n.T(c, r.title), &v, lo, hi, step,
-						choice.NumberStepperOptions{}).Changed() {
-						next := int(v + 0.5)
-						if next != f.Value {
-							a.setFeature(r.key, next)
-						}
-					}
-				})
+		if len(basicRows) > 0 {
+			grouped(c, basicRows)
+		}
+		if len(advancedRows) > 0 {
+			layout.Pane(c, i18n.T(c, "performance.advanced"), &a.advancedOpen, func() {
+				caption(c, i18n.T(c, "performance.advanced_desc"))
+				grouped(c, advancedRows)
 			})
 		}
-		grouped(c, rows)
 	})
+}
+
+// powerRows builds the control rows for the power features that exist.
+func (a *App) powerRows(c *ui.Context, s backend.Snapshot, defs []struct{ key, title string }) []func() {
+	var rows []func()
+	for _, r := range defs {
+		if !hasFeature(s, r.key) {
+			continue
+		}
+		r := r
+		rows = append(rows, func() { a.powerRow(c, s, r.key, r.title) })
+	}
+	return rows
+}
+
+// powerRow draws one power limit: a stepper for a range, a dropdown for a
+// fixed set of choices.
+func (a *App) powerRow(c *ui.Context, s backend.Snapshot, key, title string) {
+	f := s.Features[key]
+	label := i18n.T(c, title)
+	if len(f.Values) > 0 {
+		names := make([]string, len(f.Values))
+		for i, v := range f.Values {
+			names[i] = featureChoiceLabel(c, key, v)
+		}
+		sel := featureChoiceLabel(c, key, f.Value)
+		settingRow(c, label, "", func() {
+			if dropdown(c, label, names, &sel) {
+				for i, n := range names {
+					if n == sel && f.Values[i] != f.Value {
+						a.setFeature(key, f.Values[i])
+					}
+				}
+			}
+		})
+		return
+	}
+	lo, hi := float64(f.Min), float64(f.Max)
+	step := float64(f.Step)
+	if step <= 0 {
+		step = 1
+	}
+	if lo < 0 {
+		lo = 0
+	}
+	if hi <= lo {
+		hi = lo + 100
+	}
+	v := float64(f.Value)
+	if v < lo {
+		v = lo
+	}
+	if v > hi {
+		v = hi
+	}
+	format, _ := featureUnit(key)
+	settingRow(c, label, "", func() {
+		if choice.NumberStepper(c, label, &v, lo, hi, step,
+			choice.NumberStepperOptions{Format: format}).Changed() {
+			next := int(v + 0.5)
+			if next != f.Value {
+				a.setFeature(key, next)
+			}
+		}
+	})
+}
+
+// featureChoiceLabel names one value of a fixed-choice power feature.
+func featureChoiceLabel(c *ui.Context, name string, value int) string {
+	key := "feature." + name + "." + strconv.Itoa(value)
+	if v := i18n.T(c, key); v != key {
+		return v
+	}
+	return strconv.Itoa(value)
 }
 
 // fansPage edits each profile's fan curves.
@@ -640,9 +700,9 @@ func (a *App) systemPage(c *ui.Context, s backend.Snapshot) {
 			{Key: i18n.T(c, "system.daemon"), Value: s.DaemonVersion},
 		}
 		display.DescriptionList(c, nonEmpty(pairs))
-		if len(s.Features) > 0 {
+		if rows := featureRows(c, s); len(rows) > 0 {
 			section(c, i18n.T(c, "system.features"), i18n.T(c, "system.features_desc"), func() {
-				grouped(c, featureRows(c, s))
+				grouped(c, rows)
 			})
 		}
 	})
@@ -656,6 +716,9 @@ func featureRows(c *ui.Context, s backend.Snapshot) []func() {
 	var rows []func()
 	for _, name := range featureNames(s) {
 		f := s.Features[name]
+		if !f.Supported {
+			continue
+		}
 		value := f.Value
 		if f.Queued >= 0 && f.Queued != f.Value {
 			// The daemon holds a value for the next boot; show both.
@@ -698,9 +761,10 @@ func featureDescription(c *ui.Context, name string) string {
 // featureUnit returns a number attribute's format and unit.
 func featureUnit(name string) (format, unit string) {
 	switch name {
-	case "ppt_pl1_spl", "ppt_pl2_sppt", "nv_dynamic_boost", "dgpu_tgp":
+	case "ppt_pl1_spl", "ppt_pl2_sppt", "ppt_fppt", "ppt_cpu", "ppt_crossload",
+		"ppt_gpu2cpu", "gpu_power", "nv_dynamic_boost", "dgpu_tgp":
 		return "%.0f W", "W"
-	case "nv_temp_target":
+	case "nv_temp_target", "ppt_cpu_temp":
 		return "%.0f °C", "°C"
 	default:
 		return "%.0f", ""
@@ -723,6 +787,8 @@ func featureValueLabel(c *ui.Context, name string, value int) string {
 			return i18n.T(c, "gpu.ultimate")
 		}
 		return i18n.T(c, "gpu.hybrid")
+	case "cpu_boost", "power_mode":
+		return featureChoiceLabel(c, name, value)
 	}
 	format, _ := featureUnit(name)
 	if format == "%.0f W" {

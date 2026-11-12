@@ -7,7 +7,11 @@
     so this project and its binary are GPL-3.0-or-later.
   -->
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!--
+      WinExe, not Exe: the bridge talks over stdin/stdout and is started by
+      the app, so a console window would only flash on the desktop.
+    -->
+    <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>

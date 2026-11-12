@@ -16,8 +16,9 @@ dotnet publish "$root/windows/bridge/ZephyrBridge.csproj" \
   -p:PublishSingleFile=true -p:Version="$version" -o "$out"
 
 echo "building the app"
+# -H windowsgui keeps Windows from opening a console beside the window.
 GOOS=windows GOARCH=amd64 go build -trimpath \
-  -ldflags "-s -w -X main.version=$version" \
+  -ldflags "-s -w -H windowsgui -X main.version=$version" \
   -o "$out/zephyr-center.exe" "$root/cmd/zephyr-center"
 
 cp "$root/data/windows/zephyr-center.ico" "$out/zephyr-center.ico"

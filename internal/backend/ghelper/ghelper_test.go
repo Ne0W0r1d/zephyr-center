@@ -4,8 +4,12 @@ package ghelper
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -26,14 +30,56 @@ done
 // newFake returns a backend that runs the script.
 func newFake(t *testing.T) *Backend {
 	t.Helper()
-	if _, err := os.Stat("/bin/sh"); err != nil {
-		t.Skip("needs a POSIX shell")
+	return New(writeScript(t, "bridge.sh", fakeBridge))
+}
+
+// writeScript writes a shell script the bridge tests run. Windows cannot
+// exec a script by its name, so there the file is a .bat that hands the
+// same script to Git's shell; the script itself stays POSIX.
+func writeScript(t *testing.T, name, script string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS != "windows" {
+		if _, err := os.Stat("/bin/sh"); err != nil {
+			t.Skip("needs a POSIX shell")
+		}
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
 	}
-	path := t.TempDir() + "/bridge.sh"
-	if err := os.WriteFile(path, []byte(fakeBridge), 0o755); err != nil {
+	sh, err := findGitShell()
+	if err != nil {
+		t.Skip("needs Git's POSIX shell")
+	}
+	scriptPath := filepath.Join(dir, name)
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return New(path)
+	bat := "@echo off\r\n\"" + sh + "\" \"" + scriptPath + "\" %*\r\n"
+	batPath := filepath.Join(dir, strings.TrimSuffix(name, ".sh")+".bat")
+	if err := os.WriteFile(batPath, []byte(bat), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return batPath
+}
+
+// findGitShell finds the sh.exe Git for Windows ships.
+func findGitShell() (string, error) {
+	if path, err := exec.LookPath("sh"); err == nil {
+		return path, nil
+	}
+	for _, root := range []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramFiles(x86)"), os.Getenv("LocalAppData") + "\\Programs"} {
+		if root == "" {
+			continue
+		}
+		path := filepath.Join(root, "Git", "bin", "sh.exe")
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+	return "", os.ErrNotExist
 }
 
 func TestSnapshotOverTheProtocol(t *testing.T) {
@@ -96,11 +142,7 @@ func TestWindowsParityWrites(t *testing.T) {
 	logPath := t.TempDir() + "/requests.log"
 	t.Setenv("BRIDGE_LOG", logPath)
 	script := "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\" >> \"$BRIDGE_LOG\"; echo '{\"ok\":true}'; done\n"
-	path := t.TempDir() + "/record.sh"
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	b := New(path)
+	b := New(writeScript(t, "record.sh", script))
 	ctx := context.Background()
 
 	curve := backend.FanCurve{Fan: "GPU", Enabled: true}
@@ -168,12 +210,8 @@ func TestWindowsParityWrites(t *testing.T) {
 
 // TestBridgeFailureIsReported checks a non-OK reply becomes an error.
 func TestBridgeFailureIsReported(t *testing.T) {
-	path := t.TempDir() + "/fail.sh"
 	script := "#!/bin/sh\nread line\necho '{\"ok\":false,\"error\":\"the firmware refused the write\"}'\n"
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	b := New(path)
+	b := New(writeScript(t, "fail.sh", script))
 	err := b.SetProfile(context.Background(), backend.ProfileQuiet)
 	if err == nil || !strings.Contains(err.Error(), "refused") {
 		t.Fatalf("error is %v, want the bridge's message", err)
@@ -194,5 +232,46 @@ func TestConvertKeepsTheWireValues(t *testing.T) {
 	}
 	if c := s.Curves[backend.ProfileQuiet][0]; c.Fan != "GPU" || c.Temp[7] != 8 || c.PWM[7] != 16 {
 		t.Errorf("curve is %+v", c)
+	}
+}
+
+// TestBytePointsMarshalAsNumbers pins the wire form of the colour and
+// curve points: the bridge reads int[], and a []uint8 marshals as a
+// base64 string it cannot parse.
+func TestBytePointsMarshalAsNumbers(t *testing.T) {
+	body, err := json.Marshal(request{
+		Op: "set_aura", Color1: intPoints([]uint8{207, 56, 93}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"color1":[207,56,93]`) {
+		t.Errorf("colour marshalled as %s, want a number array", body)
+	}
+	if strings.Contains(string(body), base64.StdEncoding.EncodeToString([]uint8{207, 56, 93})) {
+		t.Errorf("colour marshalled as base64: %s", body)
+	}
+
+	var curve wireCurve
+	if err := json.Unmarshal([]byte(`{"fan":"CPU","temp":[30,40,50,60,70,80,90,100],"pwm":[0,64,128,160,192,224,240,255]}`), &curve); err != nil {
+		t.Fatal(err)
+	}
+	if curve.Temp[7] != 100 || curve.PWM[7] != 255 {
+		t.Errorf("curve is %+v", curve)
+	}
+}
+
+// TestConvertClampsCurveBytes checks a stray wire value cannot wrap a
+// curve point around.
+func TestConvertClampsCurveBytes(t *testing.T) {
+	body := `{"ok":true,"snapshot":{"profile":"quiet","curves":{"quiet":[{"fan":"CPU","temp":[30,40,50,60,70,80,90,300],"pwm":[0,64,128,160,192,224,240,-5]}]}}}`
+	var resp response
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatal(err)
+	}
+	s := convert(resp)
+	c := s.Curves[backend.ProfileQuiet][0]
+	if c.Temp[7] != 255 || c.PWM[7] != 0 {
+		t.Errorf("curve is %+v, want the points clamped to a byte", c)
 	}
 }

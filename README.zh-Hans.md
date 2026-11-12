@@ -2,6 +2,8 @@
 
 <p align="center"><a href="README.md">English</a> | 简体中文</p>
 
+[![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/zephyr-center)
+
 Zephyr Center 是一个用 [MyGo](https://github.com/egoist/mygo) 和
 [CrychicUI](https://github.com/ELY-Open-Source/CrychicUI) 构建的轻量级跨平台华硕游戏本控制中心。Linux 和 Windows 共用同一套界面、控件和客户端窗口装饰（CSD），Linux 端对接 [asusd](https://gitlab.com/asus-linux/asusctl)，Windows 端对接 [G-Helper](https://github.com/seerge/g-helper) 的 ACPI 层。
 
@@ -88,10 +90,22 @@ Windows 版本会启动 `zephyr-center-helper.exe`。这是一个小型控制台
 `dist/windows/`。在这个目录中运行 `zephyr-center.exe`。和 G-Helper 一样，
 它需要 ASUS ATKACPI 驱动。
 
+两个程序都以 GUI 方式构建（`-H windowsgui` 与 `WinExe`），helper 还以
+`CREATE_NO_WINDOW` 启动，因此窗口旁边不会再弹出控制台。应用日志改写进
+`%APPDATA%/zephyr-center/zephyr-center.log`，因为 GUI 程序没有 stderr 可写。
+
 桥接层覆盖性能模式、充电上限、各模式风扇曲线及其“使用自定义曲线”开关和恢复默认、
 功耗限制、显卡模式（含 MUX 直连切换）、键盘灯效，以及系统和电池详情。Windows
 下由 helper 记住各模式的曲线，并在模式切换时重新应用已启用的曲线。PPD 预设绑定
 仍仅限 Linux，因为 power-profiles-daemon 在 Windows 上没有对应实现。
+
+Windows 下固件的 Turbo 模式显示为**增强**，以免和同一页面上的 Windows 电源模式
+滑块混淆。固件无法回读当前模式与充电上限（模式端点返回的是本机支持的模式掩码），
+因此 helper 把两者记在 `%APPDATA%/zephyr-center/bridge.json`，并在启动时重新应用。
+
+显卡模式取决于 MUX：当它把屏幕直连到独显（Ultimate）时，驱动会拒绝写入 eco 端点，
+所以离开 Ultimate 只切换 MUX，并在下次重启后生效。排队的模式同样记在上面那个文件里，
+因此重启应用后仍然保留，也可以通过重新选择 Ultimate 撤销。
 
 两个平台都使用客户端窗口装饰：应用自己绘制最小化、最大化和关闭按钮，并隐藏系统
 自带的窗口按钮，因此 Windows 的标题栏按钮不会再遮住内容。

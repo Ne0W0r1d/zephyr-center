@@ -46,12 +46,22 @@ public sealed class AsusACPI
     public const int PPT_APUA0 = 0x001200A0;
     public const int PPT_GPUC0 = 0x001200C0;
     public const int PPT_GPUC2 = 0x001200C2;
+    public const int PPT_APUC1 = 0x001200C1;
+    public const int PPT_CPUB0 = 0x001200B0;
+    public const int PPT_TOTAL9A = 0x0012009A;
+    public const int PPT_GPUCPU9C = 0x0012009C;
+    public const int PPT_TEMP9E = 0x0012009E;
+    public const int PPT_CROSS9F = 0x0012009F;
+    public const int GPU_BASE = 0x00120099;
+    public const int GPU_POWER = 0x00120098;
     public const int Temp_CPU = 0x00120094;
     public const int Temp_GPU = 0x00120097;
 
     public const int PerformanceBalanced = 0;
     public const int PerformanceTurbo = 1;
     public const int PerformanceSilent = 2;
+
+    const int PresenceBit = 0x00010000;
 
     const uint GENERIC_READ = 0x80000000;
     const uint GENERIC_WRITE = 0x40000000;
@@ -99,22 +109,21 @@ public sealed class AsusACPI
     public uint GPUEco => vivo ? 0x00090120 : GPUEcoROG;
     public uint GPUMux => vivo ? 0x00090026 : GPUMuxROG;
 
-    void Control(uint code, byte[] input, byte[] output)
+    bool Control(uint code, byte[] input, byte[] output)
     {
         uint returned = 0;
-        DeviceIoControl(handle, code, input, (uint)input.Length, output,
+        return DeviceIoControl(handle, code, input, (uint)input.Length, output,
             (uint)output.Length, ref returned, IntPtr.Zero);
     }
 
-    byte[] CallMethod(uint method, byte[] args)
+    byte[]? CallMethod(uint method, byte[] args)
     {
         var input = new byte[8 + args.Length];
         BitConverter.GetBytes(method).CopyTo(input, 0);
         BitConverter.GetBytes((uint)args.Length).CopyTo(input, 4);
         Array.Copy(args, 0, input, 8, args.Length);
         var output = new byte[16];
-        Control(CONTROL_CODE, input, output);
-        return output;
+        return Control(CONTROL_CODE, input, output) ? output : null;
     }
 
     public int DeviceSet(uint id, int status)
@@ -122,7 +131,8 @@ public sealed class AsusACPI
         var args = new byte[8];
         BitConverter.GetBytes(id).CopyTo(args, 0);
         BitConverter.GetBytes((uint)status).CopyTo(args, 4);
-        return BitConverter.ToInt32(CallMethod(DEVS, args), 0);
+        var output = CallMethod(DEVS, args);
+        return output is null ? -1 : BitConverter.ToInt32(output, 0);
     }
 
     public int DeviceSet(uint id, byte[] parameters)
@@ -130,14 +140,39 @@ public sealed class AsusACPI
         var args = new byte[4 + parameters.Length];
         BitConverter.GetBytes(id).CopyTo(args, 0);
         parameters.CopyTo(args, 4);
-        return BitConverter.ToInt32(CallMethod(DEVS, args), 0);
+        var output = CallMethod(DEVS, args);
+        return output is null ? -1 : BitConverter.ToInt32(output, 0);
     }
 
     public int DeviceGet(uint id)
     {
+        int raw = DeviceGetRaw(id);
+        if (raw < 0) return -1;
+        return (raw & PresenceBit) == 0 ? raw : raw & 0xFFFF;
+    }
+
+    /// <summary>DeviceGetRaw reads an endpoint's whole reply, or -1 when the
+    /// firmware does not implement it. The high bits are flags, not part of
+    /// the value: PresenceBit says the endpoint exists, and a few endpoints
+    /// pack a mask of the options they offer into the low word instead of a
+    /// current setting.</summary>
+    public int DeviceGetRaw(uint id)
+    {
+        var output = DeviceReply(id);
+        return output is null ? -1 : BitConverter.ToInt32(output, 0);
+    }
+
+    /// <summary>DevicePresent reports whether the firmware implements an
+    /// endpoint, which is not the same as the value it holds: the mode
+    /// endpoint answers with a mask, and the charge limit with a packed
+    /// word, so neither can be probed by its value.</summary>
+    public bool DevicePresent(uint id) => DeviceReply(id) is not null;
+
+    byte[]? DeviceReply(uint id)
+    {
         var args = new byte[8];
         BitConverter.GetBytes(id).CopyTo(args, 0);
-        return BitConverter.ToInt32(CallMethod(DSTS, args), 0) - 65536;
+        return CallMethod(DSTS, args);
     }
 
     public byte[] DeviceGetBuffer(uint id, uint status = 0)
@@ -145,7 +180,7 @@ public sealed class AsusACPI
         var args = new byte[8];
         BitConverter.GetBytes(id).CopyTo(args, 0);
         BitConverter.GetBytes(status).CopyTo(args, 4);
-        return CallMethod(DSTS, args);
+        return CallMethod(DSTS, args) ?? new byte[16];
     }
 
     public bool IsSupported(uint id)

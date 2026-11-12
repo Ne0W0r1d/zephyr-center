@@ -2,6 +2,8 @@
 
 <p align="center">English | <a href="README.zh-Hans.md">简体中文</a></p>
 
+[![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/zephyr-center)
+
 A lightweight, cross-platform ROG Control Center built with
 [MyGo](https://github.com/egoist/mygo) and
 [CrychicUI](https://github.com/ELY-Open-Source/CrychicUI): one view with the
@@ -104,12 +106,29 @@ The script publishes `windows/bridge` with `dotnet` and cross-compiles the Go
 app, putting both files in `dist/windows/`. Run `zephyr-center.exe` from that
 directory. It needs the ASUS ATKACPI driver, as G-Helper does.
 
+Both programs are built as GUI programs (`-H windowsgui` and `WinExe`), and
+the helper is started with `CREATE_NO_WINDOW`, so no console appears beside
+the window. The app's log goes to `%APPDATA%/zephyr-center/zephyr-center.log`
+instead of stderr, which a GUI program has nowhere to write.
+
 The bridge covers profiles, charge limit, per-profile fan curves with the
 "use a custom curve" toggle and restore, power limits, graphics modes
 including the MUX, keyboard lighting over ASUS HID or ACPI, and the system
 and battery details. On Windows the helper remembers per-profile curves and
 reapplies the enabled one when the profile changes. PPD preset binding is
 Linux-only, since power-profiles-daemon has no Windows counterpart.
+
+Windows names the firmware's turbo profile **Enhanced**, so it does not read
+as the Windows power-mode slider on the same page. The firmware cannot be
+asked which profile or charge limit is in use — its mode endpoint answers
+with the mask of profiles the machine offers — so the helper keeps both in
+`%APPDATA%/zephyr-center/bridge.json` and reapplies the profile at startup.
+
+Graphics modes follow the MUX: while it drives the panel from the discrete
+GPU (Ultimate), the driver refuses writes to the eco endpoint, so leaving
+Ultimate only moves the MUX and takes effect on the next boot. The queued
+mode is kept in the same file, so it survives a restart of the app and can
+still be cancelled by choosing Ultimate again.
 
 Both builds use client-side decorations: the app draws its own minimize,
 maximize and close controls, and the system's window buttons are hidden. This

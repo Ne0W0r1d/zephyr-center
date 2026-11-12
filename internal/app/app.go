@@ -46,6 +46,8 @@ type App struct {
 	fanDrag   map[string]int
 	fanPoint  map[string]int
 
+	advancedOpen bool
+
 	auraMode      uint32
 	auraZone      uint32
 	auraSpeed     string
@@ -230,7 +232,7 @@ func (a *App) setProfile(p backend.Profile) {
 	a.mu.Unlock()
 	preset := a.ppdBindingFor(p)
 	ppdSupported := a.Snapshot().PPD.Supported
-	a.do(p.Label(), func(ctx context.Context) error {
+	a.do("common.applied", func(ctx context.Context) error {
 		if err := a.be.SetProfile(ctx, p); err != nil {
 			return err
 		}
@@ -323,5 +325,5 @@ func gpuRestarts(from, to backend.GPUMode) bool {
 
 // setFeature writes one firmware attribute.
 func (a *App) setFeature(name string, value int) {
-	a.do(name, func(ctx context.Context) error { return a.be.SetFeature(ctx, name, value) })
+	a.do("common.applied", func(ctx context.Context) error { return a.be.SetFeature(ctx, name, value) })
 }

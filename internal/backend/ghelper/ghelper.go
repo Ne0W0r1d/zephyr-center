@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0 OR GPL-3.0-or-later
 
-// Package ghelper drives the Windows bridge, a console program built on
+// Package ghelper drives the Windows bridge, a windowless program built on
 // G-Helper's AsusACPI layer (windows/bridge, GPL-3.0-or-later). The bridge
 // answers one JSON request per line on its standard input, so this package
 // speaks the same protocol over a child process.
@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,6 +68,7 @@ func (b *Backend) start() error {
 		return err
 	}
 	cmd := exec.Command(path)
+	hideWindow(cmd)
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -75,7 +77,7 @@ func (b *Backend) start() error {
 	if err != nil {
 		return err
 	}
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = log.Writer()
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("ghelper: start %s: %w", path, err)
 	}
@@ -90,13 +92,13 @@ type request struct {
 	Value     int     `json:"value,omitempty"`
 	Profile   string  `json:"profile,omitempty"`
 	Fan       string  `json:"fan,omitempty"`
-	Temp      []uint8 `json:"temp,omitempty"`
-	PWM       []uint8 `json:"pwm,omitempty"`
+	Temp      []int   `json:"temp,omitempty"`
+	PWM       []int   `json:"pwm,omitempty"`
 	Enabled   bool    `json:"enabled,omitempty"`
 	Mode      uint32  `json:"mode,omitempty"`
 	Zone      uint32  `json:"zone,omitempty"`
-	Color1    []uint8 `json:"color1,omitempty"`
-	Color2    []uint8 `json:"color2,omitempty"`
+	Color1    []int   `json:"color1,omitempty"`
+	Color2    []int   `json:"color2,omitempty"`
 	Speed     string  `json:"speed,omitempty"`
 	Direction string  `json:"direction,omitempty"`
 	Boot      bool    `json:"boot,omitempty"`
@@ -206,8 +208,8 @@ type wireFeature struct {
 
 type wireCurve struct {
 	Fan     string  `json:"fan"`
-	Temp    []uint8 `json:"temp"`
-	PWM     []uint8 `json:"pwm"`
+	Temp    []int   `json:"temp"`
+	PWM     []int   `json:"pwm"`
 	Enabled bool    `json:"enabled"`
 }
 
@@ -320,12 +322,26 @@ func convert(resp response) backend.Snapshot {
 				continue
 			}
 			fc := backend.FanCurve{Fan: c.Fan, Enabled: c.Enabled}
-			copy(fc.Temp[:], c.Temp)
-			copy(fc.PWM[:], c.PWM)
+			for i := 0; i < 8; i++ {
+				fc.Temp[i] = uint8(clampInt(c.Temp[i], 0, 255))
+				fc.PWM[i] = uint8(clampInt(c.PWM[i], 0, 255))
+			}
 			s.Curves[backend.Profile(p)] = append(s.Curves[backend.Profile(p)], fc)
 		}
 	}
 	return s
+}
+
+// clampInt keeps a wire number inside the range a byte can hold, so a
+// stray value from the bridge cannot wrap around.
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // convertAura maps the bridge's lighting state into the app's.
@@ -394,7 +410,7 @@ func (b *Backend) SetFeature(ctx context.Context, name string, value int) error 
 func (b *Backend) SetFanCurve(ctx context.Context, profile backend.Profile, c backend.FanCurve) error {
 	_, err := b.call(ctx, request{
 		Op: "set_fan_curve", Profile: string(profile), Fan: c.Fan,
-		Temp: c.Temp[:], PWM: c.PWM[:], Enabled: c.Enabled,
+		Temp: intPoints(c.Temp[:]), PWM: intPoints(c.PWM[:]), Enabled: c.Enabled,
 	})
 	return err
 }
@@ -424,11 +440,22 @@ func (b *Backend) SetGPUMode(ctx context.Context, mode backend.GPUMode) error {
 func (b *Backend) SetAura(ctx context.Context, m backend.AuraMode) error {
 	_, err := b.call(ctx, request{
 		Op: "set_aura", Mode: m.Mode, Zone: m.Zone,
-		Color1: []uint8{m.Color1[0], m.Color1[1], m.Color1[2]},
-		Color2: []uint8{m.Color2[0], m.Color2[1], m.Color2[2]},
+		Color1: intPoints(m.Color1[:]),
+		Color2: intPoints(m.Color2[:]),
 		Speed:  m.Speed, Direction: m.Direction,
 	})
 	return err
+}
+
+// intPoints widens byte points to the number arrays the bridge reads.
+// A []uint8 would marshal as a base64 string, which the bridge's int[]
+// fields cannot parse.
+func intPoints(v []uint8) []int {
+	out := make([]int, len(v))
+	for i, b := range v {
+		out[i] = int(b)
+	}
+	return out
 }
 
 // SetAuraBrightness implements backend.Backend.

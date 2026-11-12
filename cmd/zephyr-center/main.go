@@ -28,6 +28,8 @@ func main() {
 	locale := flag.String("lang", "", "show this language, such as zh-Hans, and save it")
 	flag.Parse()
 
+	redirectLog()
+
 	mygo.App.SetName("Zephyr Center")
 	mygo.App.SetVersion(version)
 	i18n.Register()

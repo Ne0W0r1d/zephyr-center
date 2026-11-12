@@ -22,18 +22,30 @@ static class Program
     static AsusACPI acpi = null!;
     static AuraController aura = null!;
     static FanStore fans = null!;
+    static PerformanceProfiles profiles = null!;
     static SystemDetails systemInfo = null!;
     static string model = "";
-    static string pendingGpu = "";
+
+    /// <summary>pendingGpu is the graphics mode waiting for a restart, kept
+    /// with the profile so it survives a restart of the bridge.</summary>
+    static string pendingGpu
+    {
+        get => profiles.PendingGpu;
+        set => profiles.PendingGpu = value;
+    }
 
     static int Main()
     {
         model = ReadModel();
+        PowerLimits.Apply(model);
         acpi = new AsusACPI(model);
         aura = new AuraController(acpi, model);
-        fans = new FanStore(acpi);
+        profiles = new PerformanceProfiles(acpi, StatePath());
+        fans = new FanStore(acpi, profiles);
         systemInfo = ReadSystemInfo();
         fans.Load();
+        profiles.Restore();
+        fans.ApplyEnabled(PerformanceProfiles.Name(profiles.Current));
         using var input = new StreamReader(Console.OpenStandardInput());
         using var output = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true };
         string? line;
@@ -54,6 +66,12 @@ static class Program
         acpi.Close();
         return 0;
     }
+
+    /// <summary>StatePath is where the bridge keeps the profile it applied,
+    /// beside the app's own settings.</summary>
+    static string StatePath() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "zephyr-center", "bridge.json");
 
     /// <summary>ReadModel reads the SMBIOS model name, as G-Helper's AppConfig does.</summary>
     static string ReadModel()
@@ -90,7 +108,7 @@ static class Program
             case "set_profile":
                 return SetProfile(r.Value);
             case "set_charge_limit":
-                return Apply(acpi.DeviceSet(AsusACPI.BatteryLimit, r.Value));
+                return SetChargeLimit(r.Value);
             case "set_feature":
                 return SetFeature(r.Name ?? "", r.Value);
             case "set_fan_curve":
@@ -114,19 +132,27 @@ static class Program
 
     static Response SetProfile(int value)
     {
-        int status = acpi.DeviceSet(AsusACPI.PerformanceMode, value);
-        if (status >= 0)
-        {
-            fans.ApplyEnabled(ProfileName(value));
-        }
-        return Apply(status);
+        if (!profiles.Apply(value))
+            return new Response { Ok = false, Error = "the firmware refused the profile" };
+        fans.ApplyEnabled(ProfileName(value));
+        return new Response { Ok = true };
+    }
+
+    static Response SetChargeLimit(int value)
+    {
+        if (value < 20 || value > 100)
+            return new Response { Ok = false, Error = "the charge limit must be between 20 and 100" };
+        if (acpi.DeviceSet(AsusACPI.BatteryLimit, value) != 1)
+            return new Response { Ok = false, Error = "the firmware refused the charge limit" };
+        profiles.RememberChargeLimit(value);
+        return new Response { Ok = true };
     }
 
     static Response Apply(int status) => status >= 0
         ? new Response { Ok = true }
         : new Response { Ok = false, Error = $"the firmware refused the write ({status})" };
 
-    static string ProfileName(int code) => Profiles.Name(code);
+    static string ProfileName(int code) => PerformanceProfiles.Name(code);
 
     static string ProfileName(string? profile) => Profiles.Normalize(profile);
 
@@ -134,12 +160,37 @@ static class Program
 
     static Response SetFeature(string name, int value)
     {
+        switch (name)
+        {
+            case "cpu_boost":
+                return PowerSettings.SetCpuBoost(value)
+                    ? new Response { Ok = true }
+                    : new Response { Ok = false, Error = "the power plan refused the boost mode" };
+            case "power_mode":
+                return PowerSettings.SetPowerMode(value)
+                    ? new Response { Ok = true }
+                    : new Response { Ok = false, Error = "the power plan refused the power mode" };
+            case "ppt_crossload":
+                bool cross = false;
+                if (acpi.IsSupported((uint)AsusACPI.PPT_CROSS9F))
+                    cross |= acpi.DeviceSet((uint)AsusACPI.PPT_CROSS9F, value) >= 0;
+                if (acpi.IsSupported((uint)AsusACPI.PPT_TOTAL9A))
+                    cross |= acpi.DeviceSet((uint)AsusACPI.PPT_TOTAL9A, value) >= 0;
+                return cross
+                    ? new Response { Ok = true }
+                    : new Response { Ok = false, Error = "the firmware refused the cross-loading limit" };
+        }
         int endpoint = name switch
         {
             "panel_overdrive" => (int)AsusACPI.ScreenOverdrive,
             "boot_sound" => AsusACPI.BootSound,
             "ppt_pl1_spl" => AsusACPI.PPT_APUA3,
             "ppt_pl2_sppt" => AsusACPI.PPT_APUA0,
+            "ppt_fppt" => AsusACPI.PPT_APUC1,
+            "ppt_cpu" => AsusACPI.PPT_CPUB0,
+            "ppt_gpu2cpu" => AsusACPI.PPT_GPUCPU9C,
+            "ppt_cpu_temp" => AsusACPI.PPT_TEMP9E,
+            "gpu_power" => AsusACPI.GPU_POWER,
             "nv_dynamic_boost" => AsusACPI.PPT_GPUC0,
             "nv_temp_target" => AsusACPI.PPT_GPUC2,
             _ => -1,
@@ -219,38 +270,63 @@ static class Program
             _ => "hybrid",
         };
         var current = ReadGpuActual();
-        if (current.Mode == target)
+        if (!current.Supported)
+            return new Response { Ok = false, Error = "this machine exposes no graphics switch" };
+        // A MUX change is only applied at boot, so the mode the machine will
+        // wake in counts as the one already chosen.
+        string chosen = pendingGpu != "" ? pendingGpu : current.Mode;
+        if (chosen == target)
         {
             return new Response { Ok = true };
         }
 
-        bool muxChanged = false;
-        int status = 0;
-        if (target == "ultimate")
+        // The MUX decides which GPU drives the panel, and the firmware only
+        // moves it at boot. While it points at the discrete GPU the driver
+        // refuses every write to the eco endpoint, so leaving Ultimate is a
+        // MUX write alone: the eco flag follows on the next boot.
+        if (current.Mux == 0)
         {
-            if (acpi.IsSupported(acpi.GPUEco))
-                status = acpi.DeviceSet(acpi.GPUEco, 0);
-            Thread.Sleep(500);
-            if (acpi.IsSupported(acpi.GPUMux))
+            if (target == "ultimate")
             {
-                status = acpi.DeviceSet(acpi.GPUMux, 0);
-                muxChanged = true;
+                pendingGpu = "";
+                return new Response { Ok = true };
             }
-        }
-        else
-        {
-            if (acpi.IsSupported(acpi.GPUMux) && current.Mux == 0)
-            {
-                status = acpi.DeviceSet(acpi.GPUMux, 1);
-                muxChanged = true;
-                Thread.Sleep(300);
-            }
-            if (acpi.IsSupported(acpi.GPUEco))
-                status = acpi.DeviceSet(acpi.GPUEco, target == "integrated" ? 1 : 0);
+            if (acpi.DeviceSet(acpi.GPUMux, 1) != 1)
+                return new Response { Ok = false, Error = "the firmware refused the graphics switch" };
+            pendingGpu = target;
+            return new Response { Ok = true };
         }
 
-        if (muxChanged || pendingGpu != "") pendingGpu = target;
-        return Apply(status);
+        // The MUX is away from the discrete GPU. Putting it back is another
+        // reboot, and cancels a switch out of Ultimate that has not happened
+        // yet.
+        if (target == "ultimate")
+        {
+            if (!acpi.IsSupported(acpi.GPUMux))
+                return new Response { Ok = false, Error = "this machine has no MUX to switch" };
+            if (pendingGpu == "")
+            {
+                // The discrete GPU has to be awake before the panel can be
+                // wired to it, so eco is cleared first and checked.
+                if (current.Eco == 1 && acpi.DeviceSet(acpi.GPUEco, 0) != 1)
+                    return new Response { Ok = false, Error = "the firmware would not wake the discrete GPU" };
+                Thread.Sleep(500);
+                if (acpi.IsSupported(acpi.GPUEco) && acpi.DeviceGet(acpi.GPUEco) == 1)
+                    return new Response { Ok = false, Error = "the discrete GPU is still off" };
+            }
+            if (acpi.DeviceSet(acpi.GPUMux, 0) != 1)
+                return new Response { Ok = false, Error = "the firmware refused the graphics switch" };
+            pendingGpu = target;
+            return new Response { Ok = true };
+        }
+
+        if (!acpi.IsSupported(acpi.GPUEco))
+            return new Response { Ok = false, Error = "this machine cannot switch the discrete GPU off" };
+        int eco = target == "integrated" ? 1 : 0;
+        if (current.Eco != eco && acpi.DeviceSet(acpi.GPUEco, eco) != 1)
+            return new Response { Ok = false, Error = "the firmware refused the graphics switch" };
+        pendingGpu = "";
+        return new Response { Ok = true };
     }
 
     static Response Snapshot()
@@ -268,13 +344,8 @@ static class Program
             Dgpu = info.Dgpu,
             Kernel = info.Kernel,
             Os = info.Os,
-            Profile = acpi.DeviceGet(AsusACPI.PerformanceMode) switch
-            {
-                AsusACPI.PerformanceTurbo => "performance",
-                AsusACPI.PerformanceSilent => "quiet",
-                _ => "balanced",
-            },
-            ProfileChoices = ["quiet", "balanced", "performance"],
+            Profile = PerformanceProfiles.Name(profiles.Current),
+            ProfileChoices = profiles.Choices(),
             Sensors = new Sensors
             {
                 CpuTemp = acpi.DeviceGet((uint)AsusACPI.Temp_CPU),
@@ -290,7 +361,7 @@ static class Program
         };
         if (s.ChargeSupported)
         {
-            s.ChargeLimit = acpi.DeviceGet(AsusACPI.BatteryLimit);
+            s.ChargeLimit = profiles.ChargeLimit;
         }
         if (acpi.IsSupported(AsusACPI.ScreenOverdrive))
         {
@@ -308,12 +379,80 @@ static class Program
         {
             s.Features["gpu_mux_mode"] = Feature(acpi, acpi.GPUMux);
         }
-        s.Features["ppt_pl1_spl"] = RangeFeature(acpi, (uint)AsusACPI.PPT_APUA3, 25, 90);
-        s.Features["ppt_pl2_sppt"] = RangeFeature(acpi, (uint)AsusACPI.PPT_APUA0, 25, 135);
-        s.Features["nv_dynamic_boost"] = RangeFeature(acpi, (uint)AsusACPI.PPT_GPUC0, 5, 25);
-        s.Features["nv_temp_target"] = RangeFeature(acpi, (uint)AsusACPI.PPT_GPUC2, 75, 87);
+        AddPowerFeatures(s);
         s.Curves = fans.Snapshot();
         return new Response { Ok = true, Snapshot = s };
+    }
+
+    /// <summary>AddPowerFeatures reports the power limits the way G-Helper's
+    /// Fans+Power page does: an endpoint that exists is offered, with the
+    /// model-adjusted ceiling, and a reading the firmware returns as zero
+    /// falls back to a sensible default so the control still opens.</summary>
+    static void AddPowerFeatures(Snapshot s)
+    {
+        bool a0 = acpi.IsSupported((uint)AsusACPI.PPT_APUA0);
+        bool allAmd = acpi.IsSupported((uint)AsusACPI.PPT_CPUB0)
+            && !acpi.IsSupported((uint)AsusACPI.PPT_GPUC0);
+
+        if (a0)
+        {
+            s.Features["ppt_pl1_spl"] = RangeFeature(acpi, (uint)AsusACPI.PPT_APUA3,
+                PowerLimits.MinTotal, PowerLimits.MaxTotal, PowerLimits.DefaultTotal);
+            if (!allAmd)
+                s.Features["ppt_pl2_sppt"] = RangeFeature(acpi, (uint)AsusACPI.PPT_APUA0,
+                    PowerLimits.MinTotal, PowerLimits.MaxTotal, PowerLimits.DefaultTotal);
+        }
+        if (allAmd)
+            s.Features["ppt_cpu"] = RangeFeature(acpi, (uint)AsusACPI.PPT_CPUB0,
+                PowerLimits.MinCPU, PowerLimits.MaxCPU, PowerLimits.DefaultCPU);
+        else if (acpi.IsSupported((uint)AsusACPI.PPT_APUC1))
+            s.Features["ppt_fppt"] = RangeFeature(acpi, (uint)AsusACPI.PPT_APUC1,
+                PowerLimits.MinTotal, PowerLimits.MaxTotal, PowerLimits.DefaultTotal);
+
+        if (acpi.IsSupported((uint)AsusACPI.PPT_GPUC0))
+            s.Features["nv_dynamic_boost"] = RangeFeature(acpi, (uint)AsusACPI.PPT_GPUC0,
+                PowerLimits.MinGPUBoost, PowerLimits.MaxGPUBoost, PowerLimits.MaxGPUBoost);
+        if (acpi.IsSupported((uint)AsusACPI.PPT_GPUC2))
+            s.Features["nv_temp_target"] = RangeFeature(acpi, (uint)AsusACPI.PPT_GPUC2,
+                PowerLimits.MinGPUTemp, PowerLimits.MaxGPUTemp, PowerLimits.MaxGPUTemp);
+
+        // Advanced: the older Intel/NVIDIA endpoints and the GPU TGP.
+        if (acpi.IsSupported((uint)AsusACPI.PPT_CROSS9F) || acpi.IsSupported((uint)AsusACPI.PPT_TOTAL9A))
+        {
+            uint crossEndpoint = acpi.IsSupported((uint)AsusACPI.PPT_CROSS9F)
+                ? (uint)AsusACPI.PPT_CROSS9F : (uint)AsusACPI.PPT_TOTAL9A;
+            s.Features["ppt_crossload"] = RangeFeature(acpi, crossEndpoint,
+                PowerLimits.MinCrossLoad, PowerLimits.MaxCrossLoad, PowerLimits.MaxCrossLoad);
+        }
+        if (acpi.IsSupported((uint)AsusACPI.PPT_GPUCPU9C))
+            s.Features["ppt_gpu2cpu"] = RangeFeature(acpi, (uint)AsusACPI.PPT_GPUCPU9C,
+                PowerLimits.MinGPUtoCPU, PowerLimits.MaxGPUtoCPU, PowerLimits.MaxGPUtoCPU,
+                PowerLimits.StepGPUtoCPU);
+        if (acpi.IsSupported((uint)AsusACPI.PPT_TEMP9E))
+            s.Features["ppt_cpu_temp"] = RangeFeature(acpi, (uint)AsusACPI.PPT_TEMP9E,
+                PowerLimits.MinCPUTemp, PowerLimits.MaxCPUTemp, PowerLimits.MaxCPUTemp);
+        int gpuBase = acpi.DeviceGet((uint)AsusACPI.GPU_BASE);
+        if (gpuBase > 0 && acpi.IsSupported((uint)AsusACPI.GPU_POWER))
+            s.Features["gpu_power"] = RangeFeature(acpi, (uint)AsusACPI.GPU_POWER,
+                PowerLimits.MinGPUPower, PowerLimits.MaxGPUPower, PowerLimits.MaxGPUPower);
+
+        // Advanced: the Windows power plan, as G-Helper's advanced tab.
+        int boost = PowerSettings.GetCpuBoost();
+        if (boost >= 0)
+            s.Features["cpu_boost"] = new Feature
+            {
+                Supported = true,
+                Value = boost,
+                Values = [0, 1, 2, 3, 4],
+            };
+        int powerMode = PowerSettings.GetPowerMode();
+        if (powerMode >= 0)
+            s.Features["power_mode"] = new Feature
+            {
+                Supported = true,
+                Value = powerMode,
+                Values = [0, 1, 2, 3],
+            };
     }
 
     static Feature Feature(AsusACPI acpi, uint endpoint)
@@ -327,16 +466,17 @@ static class Program
         };
     }
 
-    static Feature RangeFeature(AsusACPI acpi, uint endpoint, int min, int max)
+    static Feature RangeFeature(AsusACPI acpi, uint endpoint, int min, int max, int fallback, int step = 1)
     {
         int value = acpi.DeviceGet(endpoint);
+        if (value < min || value > max) value = fallback;
         return new Feature
         {
-            Supported = value >= 0,
-            Value = value,
+            Supported = true,
+            Value = Math.Clamp(value, min, max),
             Min = min,
             Max = max,
-            Step = 1,
+            Step = step,
         };
     }
 
@@ -344,6 +484,8 @@ static class Program
     {
         var gpu = ReadGpuActual();
         if (!gpu.Supported) return new GpuState();
+        // The MUX has moved, so the queued switch has happened.
+        if (pendingGpu != "" && gpu.Mode == pendingGpu) pendingGpu = "";
         return new GpuState
         {
             Supported = true,
@@ -614,13 +756,15 @@ sealed class FanStore
     ];
 
     readonly AsusACPI acpi;
+    readonly PerformanceProfiles profiles;
     readonly Dictionary<string, Dictionary<string, FanCurve>> curves = [];
     readonly Dictionary<string, Dictionary<string, FanCurve>> defaults = [];
     readonly HashSet<string> enabled = [];
 
-    public FanStore(AsusACPI acpi)
+    public FanStore(AsusACPI acpi, PerformanceProfiles profiles)
     {
         this.acpi = acpi;
+        this.profiles = profiles;
     }
 
     public void Load()
@@ -735,12 +879,12 @@ sealed class FanStore
 
     string? Write(string profile, FanCurve curve)
     {
-        int target = ProfileCode(profile);
-        int current = acpi.DeviceGet(AsusACPI.PerformanceMode);
-        bool switched = current >= 0 && current != target;
+        int target = PerformanceProfiles.Code(profile);
+        int current = profiles.Current;
+        bool switched = current != target;
         if (switched)
         {
-            acpi.DeviceSet(AsusACPI.PerformanceMode, target);
+            profiles.Apply(target);
             Thread.Sleep(80);
         }
 
@@ -752,11 +896,11 @@ sealed class FanStore
         catch (Exception e)
         {
             status = -1;
-            if (switched) acpi.DeviceSet(AsusACPI.PerformanceMode, current);
+            if (switched) profiles.Apply(current);
             return e.Message;
         }
-        if (switched) acpi.DeviceSet(AsusACPI.PerformanceMode, current);
-        return status >= 0 ? null : $"the firmware refused the {curve.Fan} curve ({status})";
+        if (switched) profiles.Apply(current);
+        return status == 1 ? null : $"the firmware refused the {curve.Fan} curve ({status})";
     }
 
     static FanCurve Clone(FanCurve c) => new()
@@ -797,23 +941,10 @@ sealed class FanStore
         _ => AsusFan.CPU,
     };
 
-    static int ProfileCode(string profile) => profile switch
-    {
-        "performance" => 1,
-        "quiet" => 2,
-        _ => 0,
-    };
 }
 
 static class Profiles
 {
-    public static string Name(int code) => code switch
-    {
-        1 => "performance",
-        2 => "quiet",
-        _ => "balanced",
-    };
-
     public static string Normalize(string? profile) => profile switch
     {
         "performance" => "performance",
