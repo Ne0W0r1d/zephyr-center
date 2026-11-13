@@ -197,12 +197,17 @@ GitHub Actions runs the tests and both builds on every push and pull request
 - every push to `main` replaces the single **rolling** prerelease, tagged
   `rolling`, with a snapshot of that commit;
 - pushing a version tag such as `v1.0.0` publishes a stable release with
-  versioned `linux-amd64` and `windows-amd64` archives.
+  versioned `linux-amd64` and `windows-amd64` archives, plus Debian
+  (`.deb`), Arch Linux (`pacman`, `.pkg.tar.zst`) and RPM packages.
 
 Both channels ship the same files and a `SHA256SUMS`. The version tag is
 embedded in the About page. To produce the bundles locally, run
 `./scripts/build-linux.sh` or `./scripts/build-windows.sh` with
-`VERSION=1.2.3`.
+`VERSION=1.2.3`. To turn the Linux bundle into installable packages, run
+`./scripts/package-linux.sh`; the results go to `dist/packages/` and require
+`dpkg-deb`, `rpmbuild` and `zstd` (`bsdtar` adds the Arch `.MTREE` metadata).
+The Arch package always records a `-<pkgrel>` suffix in `pkgver` (for
+example `1.0.0-1`) so pacman accepts it.
 
 ## Languages
 

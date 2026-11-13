@@ -29,11 +29,27 @@ func TestAuraModeBodyRoundTrips(t *testing.T) {
 		Mode: raw.Mode, Zone: raw.Zone,
 		Color1:    [3]byte{raw.Color1.R, raw.Color1.G, raw.Color1.B},
 		Color2:    [3]byte{raw.Color2.R, raw.Color2.G, raw.Color2.B},
-		Speed:     raw.Speed,
+		Speed:     speedFromWire(raw.Speed),
 		Direction: raw.Direction,
 	}
 	if out != in {
 		t.Errorf("round trip gave %+v, want %+v", out, in)
+	}
+}
+
+func TestAuraSpeedUsesAsusdsEnumNames(t *testing.T) {
+	for _, tc := range []struct{ app, wire string }{
+		{"Slow", "Low"},
+		{"Normal", "Med"},
+		{"Fast", "High"},
+		{"", "Med"},
+	} {
+		if got := speedToWire(tc.app); got != tc.wire {
+			t.Errorf("speedToWire(%q) = %q, want %q", tc.app, got, tc.wire)
+		}
+		if got := speedFromWire(tc.wire); got != tc.app && tc.app != "" {
+			t.Errorf("speedFromWire(%q) = %q, want %q", tc.wire, got, tc.app)
+		}
 	}
 }
 

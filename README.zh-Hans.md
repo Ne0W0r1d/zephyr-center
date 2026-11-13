@@ -160,11 +160,16 @@ MUX 由固件在 POST 阶段应用，而不是由驱动在运行时应用。因�
 - 每次向 `main` push 时，都会用该提交的快照替换唯一的 **rolling** 预发布版本，
   标签为 `rolling`；
 - 推送 `v1.0.0` 之类的版本标签时，会发布稳定版，附带带版本号的
-  `linux-amd64` 和 `windows-amd64` 压缩包。
+  `linux-amd64` 和 `windows-amd64` 压缩包，以及 Debian（`.deb`）、
+  Arch Linux（`pacman`，`.pkg.tar.zst`）和 RPM 安装包。
 
 两个发布通道包含相同的文件和 `SHA256SUMS`。版本标签会写入“关于”页面。
 要在本地生成压缩包，请运行 `./scripts/build-linux.sh` 或
-`./scripts/build-windows.sh`，并设置 `VERSION=1.2.3`。
+`./scripts/build-windows.sh`，并设置 `VERSION=1.2.3`。要把 Linux 构建结果
+打包成可安装的软件包，请运行 `./scripts/package-linux.sh`；产物位于
+`dist/packages/`，依赖 `dpkg-deb`、`rpmbuild` 和 `zstd`
+（`bsdtar` 用于生成 Arch 的 `.MTREE` 元数据）。Arch 包的 `pkgver`
+始终带 `<pkgrel>` 后缀（例如 `1.0.0-1`），以便 pacman 接受并安装。
 
 ## 语言
 

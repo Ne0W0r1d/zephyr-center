@@ -127,12 +127,40 @@ func convertMode(w auraModeWire) backend.AuraMode {
 	m := backend.AuraMode{
 		Mode:      w.Mode,
 		Zone:      w.Zone,
-		Speed:     w.Speed,
+		Speed:     speedFromWire(w.Speed),
 		Direction: w.Direction,
 	}
 	m.Color1 = color3(w.Color1)
 	m.Color2 = color3(w.Color2)
 	return m
+}
+
+// speedFromWire maps asusd's Speed enum onto the names the rest of the
+// app uses. asusd serializes the enum as Low/Med/High; G-Helper and the
+// Windows bridge call the same steps Slow/Normal/Fast.
+func speedFromWire(speed string) string {
+	switch speed {
+	case "Low":
+		return "Slow"
+	case "High":
+		return "Fast"
+	default:
+		return "Normal"
+	}
+}
+
+// speedToWire is the inverse of speedFromWire. asusd's zvariant enum
+// rejects anything but its own variant names, and reports a mismatch as
+// the bare "incorrect type" error.
+func speedToWire(speed string) string {
+	switch speed {
+	case "Slow":
+		return "Low"
+	case "Fast":
+		return "High"
+	default:
+		return "Med"
+	}
 }
 
 // color3 reads three channel values from a D-Bus array.
@@ -186,7 +214,7 @@ func auraModeBody(m backend.AuraMode) any {
 		Zone:      m.Zone,
 		Color1:    rgbWire{m.Color1[0], m.Color1[1], m.Color1[2]},
 		Color2:    rgbWire{m.Color2[0], m.Color2[1], m.Color2[2]},
-		Speed:     m.Speed,
+		Speed:     speedToWire(m.Speed),
 		Direction: m.Direction,
 	}
 }
