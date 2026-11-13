@@ -36,8 +36,9 @@ Zephyr Center 是一个用 [MyGo](https://github.com/egoist/mygo) 和
   循环次数和剩余时间。Linux 还会列出检测到的华硕/罗技 HID 外设及接收器电量；
   逐型号 DPI、按键和 RGB 编程暂未包含。
 - **关于**：版本信息、语言选择和许可证。
-- **托盘**：关闭窗口后应用继续在通知区域运行，可从托盘**打开 Zephyr 中心**
-  或**退出 Zephyr 中心**。Linux 和 Windows 使用同一个图标。
+- **托盘**：关闭窗口后应用继续在通知区域运行。点击图标打开快捷面板，显示
+  温度、风扇转速和显卡模式，可直接切换性能模式与显卡模式；右下角的
+  **退出** 结束进程，**打开应用** 找回主窗口。
 
 窗口每两秒根据一次快照重绘，读数能保持实时，同时不会阻塞 UI 线程。asusd 运行时
 它仍是唯一的写入方；如果 asusd 缺失，或没有导出较新的 `AsusArmoury` 属性，后端会
@@ -84,14 +85,14 @@ ZEPHYR_SCREENSHOTS=docs/screenshots go test ./internal/app -run TestScreenshots
 
 ## 托盘
 
-Linux 端使用 AppIndicator，需要安装 `libayatana-appindicator3` 运行库
-（Debian/Ubuntu 包名为 `libayatana-appindicator3-1`，Arch 为
-`libayatana-appindicator`）；旧版 `libappindicator3` 也可用。GNOME 还需要启用
-显示状态图标的扩展，例如 **AppIndicator and KStatusNotifierItem Support**；
-KDE Plasma、Xfce、Cinnamon 等桌面可直接显示。
+Linux 端直接通过会话总线注册 StatusNotifierItem，不再依赖
+`libayatana-appindicator`。KDE Plasma、Xfce、Cinnamon 等桌面可直接显示；
+GNOME 需要启用显示状态图标的扩展，例如 **AppIndicator and
+KStatusNotifierItem Support**。
 
-如果无法加载 `libayatana-appindicator3`，应用会记录托盘创建失败，并
-保留关闭按钮的正常行为，而不是把窗口藏起来后无法找回。
+如果找不到 StatusNotifierWatcher，应用会记录托盘创建失败，并保留关闭按钮的
+正常行为，而不是把窗口藏起来后无法找回。Windows 与 macOS 使用 MyGo 的原生
+通知区域。
 
 ## Windows
 

@@ -304,5 +304,11 @@
   "app.updated": "已更新",
 
   "tray.open": "打开 Zephyr 中心",
-  "tray.quit": "退出 Zephyr 中心"
+  "tray.quit": "退出 Zephyr 中心",
+
+  "quick.performance": "性能模式",
+  "quick.graphics": "显卡模式",
+  "quick.reboot": "需要重启",
+  "quick.open": "打开应用",
+  "quick.quit": "退出"
 }

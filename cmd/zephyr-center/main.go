@@ -71,7 +71,7 @@ func main() {
 		}
 		win := mygo.NewWindow(opts)
 		a.AttachWindow(win)
-		attachTray(win)
+		attachTray(win, a)
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

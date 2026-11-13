@@ -50,8 +50,10 @@ The same view in the dark theme:
   receiver exposes; per-model DPI, button and RGB programming is not included.
 - **About** — versions, the language picker, and the licences.
 - **Tray** — closing the window keeps the app running in the notification
-  area, where **Open Zephyr Center** brings it back and **Quit Zephyr
-  Center** exits. Linux and Windows use the same icon.
+  area. Clicking the icon opens a quick panel with temperatures, fan
+  speeds and the graphics mode, switches for the performance and graphics
+  modes, and **Quit** in the bottom-right corner. **Open app** brings the
+  full window back.
 
 The window redraws from a snapshot every two seconds, so the readings stay
 live without blocking the UI thread. When asusd is running it remains the
@@ -104,16 +106,16 @@ That writes every page, in light and dark. A few are checked in under
 
 ## Tray
 
-The tray icon uses AppIndicator on Linux, so the desktop needs the
-`libayatana-appindicator3` runtime library (on Debian and Ubuntu,
-`libayatana-appindicator3-1`; Arch has `libayatana-appindicator`). The older
-`libappindicator3` works too. GNOME also needs an extension that shows status
-icons, such as **AppIndicator and KStatusNotifierItem Support**. KDE Plasma,
-Xfce, Cinnamon and most other desktops show it directly.
+On Linux the tray icon is a StatusNotifierItem registered directly on the
+session bus, so it does not need `libayatana-appindicator`. KDE Plasma,
+Xfce, Cinnamon and most other desktops show it directly. GNOME needs an
+extension that shows status icons, such as **AppIndicator and
+KStatusNotifierItem Support**.
 
-If `libayatana-appindicator3` cannot be loaded, the app logs that the
-tray could not be created and keeps the window's close button working
-normally instead of hiding the app with no way back.
+If no StatusNotifierWatcher is available, the app logs that the tray could
+not be created and keeps the window's close button working normally
+instead of hiding the app with no way back. Windows and macOS use MyGo's
+native notification area.
 
 ## Windows
 

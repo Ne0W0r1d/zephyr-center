@@ -304,5 +304,11 @@
   "app.updated": "Updated",
 
   "tray.open": "Open Zephyr Center",
-  "tray.quit": "Quit Zephyr Center"
+  "tray.quit": "Quit Zephyr Center",
+
+  "quick.performance": "Performance mode",
+  "quick.graphics": "Graphics mode",
+  "quick.reboot": "Restart needed",
+  "quick.open": "Open app",
+  "quick.quit": "Quit"
 }

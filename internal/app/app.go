@@ -243,6 +243,14 @@ func (a *App) Snapshot() backend.Snapshot {
 	return s
 }
 
+// SetProfile applies p. The tray's quick panel uses the same path as the
+// performance page, so per-profile power and lighting settings follow.
+func (a *App) SetProfile(p backend.Profile) { a.setProfile(p) }
+
+// SetGPUMode applies mode. The quick panel and the graphics page share
+// the same live switch and queued-MUX handling.
+func (a *App) SetGPUMode(mode backend.GPUMode) { a.setGPU(mode) }
+
 // toastLater shows the message of key in the window after the next action.
 func (a *App) toastLater(key string) {
 	a.mu.Lock()
